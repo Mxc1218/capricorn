@@ -49,10 +49,11 @@ class AgentlabRunner:
             return Outcome(error="缺少 DEEPSEEK_API_KEY")
 
         agent = Agent(
-            llm=LLM(api_key=key, model=self.model, timeout=max(60, budget_s)),
+            llm=LLM(api_key=key, model=self.model, timeout=min(180, max(60, budget_s // 2))),
             registry=default_registry(workdir),
             max_steps=max_steps,
             trace_dir=workdir / "traces",
+            deadline_s=budget_s,
         )
         t0 = time.time()
         try:

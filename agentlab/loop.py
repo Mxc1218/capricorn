@@ -57,11 +57,14 @@ class Agent:
         registry: Registry,
         max_steps: int = 12,
         trace_dir: Path | None = Path("runs"),
+        deadline_s: float | None = None,
     ):
         self.llm = llm
         self.registry = registry
         self.max_steps = max_steps
         self.trace_dir = trace_dir
+        # ★ 墙钟预算。步数上限挡不住"一步跑十分钟"，评测里必须两把锁都上。
+        self.deadline_s = deadline_s
 
     def _env_block(self) -> str:
         """把执行环境写进 system prompt —— 模型不该靠试探来发现自己在哪。
@@ -91,8 +94,18 @@ class Agent:
         answer = ""
         finished = False
 
+        t_start = time.time()
+
+        def out_of_time() -> bool:
+            return self.deadline_s is not None and (time.time() - t_start) > self.deadline_s
+
         try:
             for i in range(1, self.max_steps + 1):
+                if out_of_time():
+                    answer = f"（超时：{self.deadline_s:.0f}s 预算用尽，未收尾）"
+                    if tracer:
+                        tracer.event("deadline", step=i, elapsed=round(time.time() - t_start, 1))
+                    break
                 reply = self.llm.chat(messages, tools=self.registry.schemas())
                 total.merge(reply.usage)
                 msg = reply.message
