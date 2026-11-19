@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cairn 攻击树 · 只读视图</title>
+<script>
+/* ★ 主题必须在首次绘制前定下来，否则会先闪一下深色再切浅色。
+   优先级：URL 参数 ?theme= > 上次选择（localStorage）> 默认浅色。 */
+(function () {
+  try {
+    var m = /[?&]theme=(light|dark)/.exec(location.search);
+    var saved = null;
+    try { saved = localStorage.getItem("cairn-theme"); } catch (e) {}
+    var t = (m && m[1]) || (saved === "dark" || saved === "light" ? saved : "light");
+    document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {
+    document.documentElement.setAttribute("data-theme", "light");
+  }
+})();
+</script>
+<link rel="stylesheet" href="/static/tree/tree.css?v=20261017-settings">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Cairn 攻击树<span class="sub">只读态势 · 证据与推导</span></h1>
+    <div id="pulse" class="stat"></div><div class="spacer"></div><button id="btnMetrics" aria-expanded="false" aria-controls="metrics">详细统计</button>
+    <!-- ★ 计时器单独一个稳定容器：它每秒自己刷新，不能被 renderStats() 的重建清掉 -->
+    <div id="metrics" hidden><div class="stat" id="stats"></div></div>
+    <div class="spacer"></div>
+    <button id="btnTheme" title="切换明暗">明/暗</button>
+  </header>
+
+  <div id="project-context" aria-live="polite">正在加载项目…</div>
+  <div id="attempt-scope" role="status" aria-live="polite"><span id="attempt-label">等待项目与实例标识</span><button id="btnLatestAttempt" hidden>查看该题最新项目</button></div>
+  <div id="timers" aria-label="常驻项目计时"></div>
+  <section id="execution-panel" aria-label="并发认领与执行态势">
+    <div class="execution-heading"><strong id="execution-summary">等待项目数据</strong><button id="btnFocusExecuting" disabled>定位验证路径</button><span id="execution-projects"></span><details id="execution-history"><summary>认领变化 <span id="execution-event-count">0</span></summary><ol id="execution-events"></ol></details></div>
+    <div id="execution-list"></div><p id="execution-empty">等待项目数据</p>
+    <div class="execution-note">蓝色活动轨道只在推断节点内部表示观测到的验证活动，事实依赖线不流动。累计时间标为“观测”时仅统计本页连续收到的活动快照，不含打开前历史或断连间隔；不是后台完整执行账本。心跳只保留在诊断提示中。</div>
+  </section>
+  <div id="update-row"><span id="update-note" role="status" aria-live="polite">等待首次快照</span><button id="btnLive" class="on" title="每 2 秒刷新当前项目；列表每 8 秒刷新" aria-pressed="true">实时刷新</button><button id="btnRefresh">立即刷新</button></div>
+  <div id="load-error" role="alert" hidden></div>
+  <div id="toolbar">
+    <div class="grp" aria-label="视图切换"><button data-view="reasoning" class="on">推理树</button><button data-view="overview">总览</button><button data-view="current">当前方向</button><button data-view="graph">全量推导图</button><button id="btnCanvasFocus" aria-pressed="false" title="让推理树铺满应用窗口（快捷键 F）；不进入系统全屏，Esc 退出">画布专注 <span class="kbd">F</span></button><button id="btnSettingsToggle" aria-pressed="false" title="收起推理树的辅助区块（图例 / 说明 / 缩略导航），把纵向空间让给树（快捷键 S）">设置区 <span class="kbd">S</span></button></div>
+    <div class="grp">
+      <span class="lbl">搜索</span>
+      <input type="text" id="search" aria-label="搜索事实" placeholder="搜索事实（/ 聚焦）">
+      <button id="btnClearSearch">清空</button>
+    </div>
+    <details id="tools"><summary>筛选与回放</summary><div class="advanced-tools">    <div class="grp">
+      <span class="lbl">过滤</span>
+      <button data-f="all" class="on">全部</button>
+      <button data-f="flag">含 flag</button>
+      <button data-f="receipt">回执文本</button><button data-f="accepted">通过回执</button><button data-f="rejected">拒收/否决</button>
+      <button data-f="hardening">红线违规</button>
+      <button data-f="denial">全部否定词</button>
+      <button data-f="running">执行方向</button>
+      <button data-f="orphan">未归属</button>
+    </div>
+
+    <div class="grp">
+      <span class="lbl">时间轴</span>
+      <input type="range" id="tls" aria-label="事实时间回放" min="0" max="1000" value="1000">
+      <button id="btnPlay">▶ 回放</button>
+      <span class="lbl" id="tlsLabel">全部</span>
+    </div>
+    <div class="grp">
+      <button id="btnChain" title="按时间排列的里程碑，不是因果链">里程碑列表</button>
+      <button id="btnFold" class="on" title="把已收敛的方向折成窄块，未收敛的向左靠">折叠收敛方向</button>
+      <button id="btnEdges" class="on" title="三类边：触发 / 产出 / 收敛">显示推导关系</button>
+      <button id="btnFit">适配宽度</button>
+    </div></div></details>
+  </div>
+
+  <div id="main">
+    <!-- ★ 左侧项目列表：竖向铺开、每项很矮、带状态、可分组折叠、整列可收起 -->
+    <aside id="projbar">
+      <div id="projbar-hd">
+        <button id="btnProjCollapse" title="把整个项目列表往左收起">‹</button>
+        <span class="t" id="projbar-title">项目</span>
+        <span class="cnt" id="projbar-cnt"></span>
+      </div>
+      <div id="projbar-filter">
+        <input type="text" id="projSearch" aria-label="筛选项目" placeholder="筛选项目（id / 标题）">
+      </div>
+      <div id="projbar-body"></div>
+    </aside>
+    <div id="stage">
+      <section id="reasoning" aria-label="事实与推断关系树" hidden>
+        <div id="canvas-focusbar" aria-label="画布专注控制">
+          <span id="canvas-focus-context"></span><span id="canvas-focus-status" role="status"></span>
+          <input id="canvas-focus-search" type="text" aria-label="专注模式搜索事实" placeholder="搜索事实（/）">
+          <label>缩放 <select id="canvas-focus-zoom" aria-label="专注模式推理树缩放"></select></label>
+          <button id="btnFocusLatest">定位最新</button><button id="btnCanvasOptions" aria-expanded="false" aria-controls="reason-settings">图设置</button>
+          <button id="btnFocusRefresh">刷新</button><button id="btnCanvasFocusExit">退出专注 · Esc</button>
+        </div>
+        <div id="reason-settings">
+        <div class="reason-heading"><strong>事实 → 推断 → 新事实 → 结果</strong><span id="reason-counts"></span></div>
+        <div class="reason-controls" aria-label="推理树控制">
+          <button data-reason-mode="success" class="on">结果依赖</button>
+          <button data-reason-mode="ancestors">完整上下文</button>
+          <button data-reason-mode="all">全部推理</button><button id="btnTooling" aria-pressed="false">展开工具说明</button>
+          <label>终点 <select id="reason-target" aria-label="结果终点"></select></label>
+          <label>排版 <select id="reason-layout" aria-label="事实产出排版"><option value="grouped">产出归组</option><option value="id">按列编号</option></select></label>
+          <label>缩放 <select id="reason-zoom" aria-label="推理树缩放"><option value="auto">横向精读</option><option value="fit">整图总览</option><option value="0.6">60%</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option></select></label>
+        </div>
+        <div class="reason-legend"><span class="reason-key fact">矩形 · 事实记录</span><span class="reason-key intent">六边形 · 推断 / 行动</span><span class="reason-key live">节点内蓝色轨道 · 验证中</span><span class="reason-key merge">橙色虚线 · 合并关系</span><span class="reason-key accepted">绿框 · 通过回执（文本）</span><span class="reason-key flag-found-key">浅绿虚线 · flag候选链（待校验）</span><span class="reason-key flag-confirmed-key">深绿实线 · 通过回执链</span></div>
+        <div id="reason-results" aria-label="候选与回执核对"></div>
+        <p id="reason-evidence-status"></p>
+        <div class="reason-status-row"><span id="reason-status" role="status"></span><button id="reason-expand">展开其余上游依据</button></div>
+        <p id="reason-note"></p>
+        <div class="reason-navigation"><svg id="reason-map" role="img" aria-label="可点击的全图缩略导航" xmlns="http://www.w3.org/2000/svg"></svg><div class="reason-navigation-actions"><button id="reason-start">回到起点</button><button id="reason-latest">最新推断居中</button><button id="reason-end">定位结果</button><span id="reason-zoom-status"></span></div></div>
+        </div>
+        <div id="reason-canvas" tabindex="0" aria-label="可滚动的推理树画布"><div id="reason-surface"><svg id="reason-tree" aria-label="事实推断树与成功路径" xmlns="http://www.w3.org/2000/svg"></svg></div></div>
+        <pre id="reason-diagnostic" hidden>{"ready":false}</pre>
+      </section>
+      <section id="overview" aria-label="项目总览"></section>
+      <section id="current-view" aria-label="当前方向" hidden></section>
+      <p id="trace-info" role="status" hidden></p>
+      <details id="legend-panel" hidden><summary>关系图例与数据口径</summary><div id="legend">
+        <span class="k"><span class="bx" style="background:var(--gold-bg);border-color:var(--gold)"></span>候选 flag（非得分确认）</span>
+        <span class="k"><span class="bx" style="background:var(--green-bg);border-color:var(--green-line)"></span>【平台回执】</span>
+        <span class="k"><span class="bx" style="background:var(--grey-bg);border-color:var(--grey);border-style:dashed"></span>【方向失败】</span>
+        <span class="k"><span class="bx" style="background:var(--card);border-color:var(--red)"></span>全称否定违规</span>
+        <span class="k"><span class="bx" style="background:var(--card);border-color:var(--grey);border-style:dashed"></span>未归属（无 source_intent）</span>
+        <span class="k"><span class="bx" style="background:var(--card);border-color:var(--fg3);border-style:dashed"></span>未收敛方向（不等于执行中）</span>
+        <span class="k" style="margin-left:8px"><span class="sw" style="background:var(--violet)"></span>触发边</span>
+        <span class="k"><span class="sw" style="background:var(--green)"></span>产出边</span>
+        <span class="k"><span class="sw" style="background:var(--gold)"></span>收敛边（结论）</span>
+      </div>
+      </details>
+      <svg hidden aria-label="全量事实与方向推导图" id="tree" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div id="side" class="hide" aria-label="节点完整详情">
+      <div id="side-hd">
+        <span class="t" id="side-title">点击任一节点查看完整描述</span>
+        <div class="spacer"></div>
+        <button id="btnClose">关闭</button>
+      </div>
+      <div id="side-body"><div class="empty">左键点 fact / intent 节点，这里会显示<b>完整不截断</b>的 description 与全部推导关系。</div></div>
+    </div>
+  </div>
+  <div id="hint-banner" class="hide"></div>
+  <div id="banner" class="hide"></div>
+  <!-- ★ 有效链路横条：固定在视口下方，永远可见（不放进可滚动画布）-->
+  <div id="chainbar" class="hide">
+    <div id="chainbar-hd"></div>
+    <div id="chainbar-body"></div>
+  </div>
+  <div id="foot">
+    <span id="foot-info"></span>
+    <span class="lg" id="foot-status">等待数据</span>
+  </div>
+</div>
+<div id="tip"></div>
+<pre id="selfcheck">{"ready":false}</pre>
+<pre id="lanediag">{}</pre>
+<pre id="jslog">[]</pre>
+
+
+<script>
+/* 调试输出：★ 内容**始终**写进 DOM，只有「显示」受 ?debug=1 控制。
+   为什么：无头测试就是靠 --dump-dom 读这个元素的。如果连内容都不写，
+   出问题时 dump 里看到的是空的，你根本不知道页面报了什么错
+   （我自己就被这个坑了半小时：忘了加 ?debug=1，于是以为脚本没执行）。 */
+window.__JSLOG__ = [];
+window.__DEBUG__ = /[?&]debug=1/.test(location.search);
+function jlog(msg) {
+  try {
+    window.__JSLOG__.push(String(msg));
+    if (window.__JSLOG__.length > 200) window.__JSLOG__.splice(0, window.__JSLOG__.length - 200);
+    var n = document.getElementById("jslog");
+    if (n) {
+      n.textContent = JSON.stringify(window.__JSLOG__, null, 1);
+      if (window.__DEBUG__) n.style.display = "block";
+    }
+  } catch (e) {}
+}
+window.addEventListener("error", function (e) {
+  jlog("error: " + (e.message || "") + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
+});
+window.addEventListener("unhandledrejection", function (e) {
+  jlog("reject: " + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+});
+</script>
+<script defer src="/static/tree/attempt-scope.js?v=20261017-settings"></script>
+<script defer src="/static/tree/viewer-semantics.js?v=20261017-settings"></script>
+<script defer src="/static/tree/execution-clock.js?v=20261017-settings"></script>
+<script defer src="/static/tree/live-execution.js?v=20261017-settings"></script>
+<script defer src="/static/tree/model.js?v=20261017-settings"></script>
+<script defer src="/static/tree/reasoning-model.js?v=20261017-settings"></script>
+<script defer src="/static/tree/core.js?v=20261017-settings"></script>
+<script defer src="/static/tree/graph.js?v=20261017-settings"></script>
+<script defer src="/static/tree/inspect.js?v=20261017-settings"></script>
+<script defer src="/static/tree/execution-ui.js?v=20261017-settings"></script>
+<script defer src="/static/tree/reasoning.js?v=20261017-settings"></script>
+<script defer src="/static/tree/canvas-focus.js?v=20261017-settings"></script>
+<script defer src="/static/tree/data.js?v=20261017-settings"></script>
+</body>
+</html>

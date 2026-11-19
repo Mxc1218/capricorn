@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from agentlab.state import fact_tone, task_view
 
 HERE = Path(__file__).resolve().parent
+LEGACY = HERE / "legacy"
 PROJECT = HERE.parent
 RESULTS = PROJECT / "eval" / "results"
 BOARDS = PROJECT / "eval" / "boards"
@@ -46,6 +47,33 @@ def read_jsonl(path: Path):
                 pass
     except Exception:
         pass
+    return out
+
+
+def project_sources():
+    # 一个跑过的项目 = (run 目录, 题目名)。他那边一个 project 就是一次尝试。
+    out = []
+    if not RESULTS.exists():
+        return out
+    used = set()
+    for d in sorted(RESULTS.iterdir()):
+        if not d.is_dir():
+            continue
+        for sub in sorted(d.iterdir()):
+            if not sub.is_dir():
+                continue
+            tasks = sub / "work" / "tasks.jsonl"
+            if not tasks.exists():
+                continue
+            pid = sub.name if sub.name not in used else d.name + ":" + sub.name
+            used.add(pid)
+            out.append({
+                "project_id": pid,
+                "title": sub.name + " · " + d.name,
+                "board_path": str(BOARDS / (sub.name + ".jsonl")),
+                "tasks_path": str(tasks),
+                "live_dir": str(LIVE),
+            })
     return out
 
 
@@ -207,7 +235,29 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         if u.path in ("/", "/index.html"):
+            # 根路径给他那套前端；我们自己的调试台挪到 /console
+            return self._send((LEGACY / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/console":
             return self._send((HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path.startswith("/static/"):
+            rel = u.path[len("/static/"):]
+            f = LEGACY / rel
+            if f.is_file():
+                ctype = "application/javascript; charset=utf-8" if f.suffix == ".js" else (
+                    "text/css; charset=utf-8" if f.suffix == ".css" else "application/octet-stream")
+                return self._send(f.read_bytes(), ctype)
+            self.send_response(404); self.end_headers(); return
+        if u.path == "/tree/projects":
+            from viz.adapter import list_projects
+            return self._json(list_projects(project_sources()))
+        if u.path.startswith("/projects/") and u.path.endswith("/tree"):
+            from viz.adapter import build_project
+            from urllib.parse import unquote
+            pid = unquote(u.path[len("/projects/"):-len("/tree")]).strip("/")
+            src = next((s for s in project_sources() if s["project_id"] == pid), None)
+            if not src:
+                self.send_response(404); self.end_headers(); return
+            return self._json(build_project(src))
         if u.path == "/api/runs":
             return self._json(list_runs())
         if u.path == "/api/live":
