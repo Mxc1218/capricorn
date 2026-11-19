@@ -105,7 +105,9 @@ class Orchestrator:
             "1. 先把确认到的结论用 note 记进黑板，再继续下一步。\n"
             "2. 只做这一条任务，不要顺手做别的事。\n"
             "3. 做完调用 finish，把结论一句话写进 answer。\n"
-            "4. 做不完也要 finish，说明卡在哪 —— 不要空转到步数用完。"
+            "4. 做不完也要 finish，说明卡在哪 —— 不要空转到步数用完。\n"
+            "5. 结束前必须在黑板留一条 note：做了什么、结果如何。**失败也要留**，"
+            "因为\"这条路不通\"和\"这条路通了\"一样值钱。"
         ) % (task.title, task.detail, self._fact_brief(task.from_facts))
 
         live = None
@@ -137,6 +139,18 @@ class Orchestrator:
         with self._lock:
             task.produced = [f.id for f in self.board.all() if f.id not in before]
             task.ended_at = _time.time()
+            # ★ 模型不一定照做，所以"这轮干了什么"由编排者兜底写进黑板。
+            #   否则失败轮次在黑板上一片空白，规划者下一轮只能瞎猜 ——
+            #   实测就是这么连续猜了四个模块（命令注入→文件上传→文件包含→SQL 注入）。
+            if not task.produced:
+                fact = self.board.add(
+                    "note",
+                    "[%s] %s → %s" % (task.status, task.title, (task.result or "无结论")[:200]),
+                    source="orchestrator",
+                    produced_by=task.id,
+                    evidence_status="unverified",
+                )
+                task.produced = [fact.id]
             self.store.update(task)
 
         if live is not None:
