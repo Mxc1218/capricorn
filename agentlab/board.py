@@ -47,24 +47,28 @@ class Board:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: list[Fact] | None = None
+        # ★ 多个执行者会同时写黑板（编排里默认并发 2 个），append 必须串行。
+        import threading as _threading
+        self._lock = _threading.Lock()
 
     # -- 写 -----------------------------------------------------------------
     def add(self, kind: str, content: str, source: str = "", tags: list[str] | None = None) -> Fact:
         if kind not in KINDS:
             raise ValueError("未知类型 %r（可用: %s）" % (kind, ", ".join(KINDS)))
-        fact = Fact(
-            id="f%03d" % (len(self.all()) + 1),
-            ts=time.time(),
-            kind=kind,
-            content=(content or "").strip(),
-            source=source,
-            tags=tags or [],
-        )
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
-        if self._cache is not None:
-            self._cache.append(fact)
-        return fact
+        with self._lock:
+            fact = Fact(
+                id="f%03d" % (len(self.all()) + 1),
+                ts=time.time(),
+                kind=kind,
+                content=(content or "").strip(),
+                source=source,
+                tags=tags or [],
+            )
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
+            if self._cache is not None:
+                self._cache.append(fact)
+            return fact
 
     # -- 读 -----------------------------------------------------------------
     def all(self) -> list[Fact]:
