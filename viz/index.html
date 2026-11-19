@@ -73,6 +73,14 @@ border-radius:6px;padding:6px 9px;font-size:11px;color:var(--fg2)}
   </div>
 </main>
 <script>
+// 页面出错不要变成一片黑：把错误写到画布和标题上
+window.onerror = function(m, src, line){
+  try{
+    const c = document.getElementById('canvas');
+    if(c) c.innerHTML = '<text x="20" y="40" fill="#ff5f56" font-size="12">JS 出错：' + (m||'') + ' （第 ' + line + ' 行）</text>';
+    document.getElementById('status').textContent = '出错';
+  }catch(e){}
+};
 let state = { runs: [], live: [], graph: {nodes:[],edges:[]}, board: [], selTask:null, selWork:null, view:'tree', sel:null };
 
 const fmt = s => s == null ? '-' : (s >= 1000 ? (s/1000).toFixed(1)+'k' : s);
@@ -116,9 +124,27 @@ function renderRuns(runs){
 }
 
 // ── 中：推理树（分层布局）───────────────────────────────────
-function drawTree(){
+let nodeEls = {};          // id -> {badge, rect, meta}
+let graphKey = "";         // 内容指纹：只有内容变了才重建 SVG
+let graphStamp = 0;        // 上次收到数据的时间，计时器据此增量累加
+
+function graphSignature(g){
+  // 只把"会影响几何"的东西算进指纹；计时是每分钟在变的，不能算进来，
+  // 否则每秒都全量重绘 —— 旧前端那个 reasoningContentKey 就是在做这件事。
+  const n = (g.nodes||[]).map(x => x.id + ':' + (x.type==='task' ? (x.view&&x.view.state) : (x.kind||'')) + ':' + (x.type==='task'? x.title : '')).join('|');
+  const e = (g.edges||[]).map(x => x.from+'>'+x.to+':'+x.kind).join('|');
+  return n + '#' + e;
+}
+
+function fmtDur(s){ s = Math.max(0, Math.round(s)); return s < 60 ? s+'s' : (s<3600 ? Math.floor(s/60)+'m'+(s%60)+'s' : Math.floor(s/3600)+'h'+Math.floor(s%3600/60)+'m'); }
+
+function drawTree(force){
   const svg = document.getElementById('canvas');
   const g = state.graph;
+  const sig = graphSignature(g);
+  if(!force && sig === graphKey){ updateTimers(); return; }   // ← 增量：不动 DOM
+  graphKey = sig; graphStamp = Date.now(); nodeEls = {};
+
   const box = svg.getBoundingClientRect();
   const W = Math.max(600, box.width || 800), H = Math.max(400, box.height || 600);
   svg.setAttribute('viewBox', '0 0 '+W+' '+H);
@@ -129,46 +155,71 @@ function drawTree(){
     return;
   }
 
-  // 分层：没有入边的在第一层，其余取前驱最大层 +1
+  // ── 泳道：每条链一行。链的归属 = 它最早的祖先（根事实）────────────
   const byId = {}; g.nodes.forEach(n => byId[n.id] = n);
   const preds = {}; g.nodes.forEach(n => preds[n.id] = []);
   g.edges.forEach(e => { if(preds[e.to]) preds[e.to].push(e.from); });
-  const layer = {}; const seen = new Set();
-  function depth(id, guard){
-    if(layer[id] != null) return layer[id];
-    if(guard.has(id)) return 0; guard.add(id);
+  const depth = {}, root = {};
+  function resolve(id, guard){
+    if(depth[id] != null) return;
+    if(guard.has(id)){ depth[id] = 0; root[id] = id; return; }
+    guard.add(id);
     const ps = (preds[id]||[]).filter(p => byId[p]);
-    const d = ps.length ? Math.max(...ps.map(p => depth(p, guard))) + 1 : 0;
-    layer[id] = Math.min(d, 20); guard.delete(id); return layer[id];
+    if(!ps.length){ depth[id] = 0; root[id] = id; guard.delete(id); return; }
+    ps.forEach(p => resolve(p, guard));
+    depth[id] = Math.max(...ps.map(p => depth[p] || 0)) + 1;
+    root[id] = ps.map(p => root[p]).sort()[0];
+    guard.delete(id);
   }
-  g.nodes.forEach(n => depth(n.id, seen));
+  g.nodes.forEach(n => resolve(n.id, new Set()));
 
-  const cols = {}; g.nodes.forEach(n => { (cols[layer[n.id]] = cols[layer[n.id]] || []).push(n); });
-  const colW = Math.min(210, (W - 60) / Math.max(1, Object.keys(cols).length));
+  const lanes = {};
+  g.nodes.forEach(n => { const k = root[n.id] || n.id; (lanes[k] = lanes[k] || []).push(n); });
+  const laneKeys = Object.keys(lanes).sort((a,b) => (byId[a]?.ts || 0) - (byId[b]?.ts || 0));
+
+  const maxDepth = Math.max(1, ...Object.values(depth));
+  const NW = 186, NH_TASK = 40, NH_FACT = 24, GAP_X = 46, GAP_Y = 10;
+  const colW = NW + GAP_X;
+  const needW = 26 + (maxDepth + 1) * colW;
+  const W2 = Math.max(W, needW);
+  svg.setAttribute("viewBox", "0 0 " + W2 + " " + H);
+
+  // 泳道内按「层」堆叠：同一层放不下就往下一行，避免节点互相压住
   const pos = {};
-  Object.keys(cols).forEach(k => {
-    const list = cols[k], cw = 178, gapY = (H - 50) / Math.max(1, list.length);
-    list.forEach((n, i) => { pos[n.id] = { x: 24 + k*colW, y: 34 + i*gapY + gapY/2 }; });
+  let yCursor = 16;
+  laneKeys.forEach((k) => {
+    const list = lanes[k].slice().sort((a,b) => (depth[a.id]-depth[b.id]) || ((a.ts||a.created||0)-(b.ts||b.created||0)));
+    const stack = {};
+    let laneBottom = yCursor;
+    list.forEach((n) => {
+      const d = depth[n.id] || 0;
+      const idx = stack[d] = (stack[d] || 0) + 1;
+      const y = yCursor + (idx - 1) * (NH_TASK + GAP_Y + 4);
+      pos[n.id] = { x: 26 + d * colW, y: y };
+      laneBottom = Math.max(laneBottom, y + NH_TASK + 6);
+    });
+    yCursor = laneBottom + 18;
   });
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
   defs.innerHTML = '<marker id="arw" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#3a4d70"/></marker>';
   svg.appendChild(defs);
 
+
   // 边
   g.edges.forEach(e => {
     const a = pos[e.from], b = pos[e.to];
     if(!a || !b) return;
-    const color = e.kind === 'produce' ? '#b08cff' : (e.kind === 'support' ? '#3a4d70' : '#ffc857');
-    const x1 = a.x + 168, y1 = a.y + 11, x2 = b.x, y2 = b.y + 11;
+    const color = e.kind === 'produce' ? '#b08cff' : (e.kind === 'support' ? '#3a4d70' : (e.kind === 'merge' ? '#7c8aa0' : '#ffc857'));
+    const x1 = a.x + NW, y1 = a.y + 14, x2 = b.x, y2 = b.y + 14;
     const mid = (x1 + x2) / 2;
-    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
-    p.setAttribute('d', 'M'+x1+','+y1+' C'+mid+','+y1+' '+mid+','+y2+' '+x2+','+y2);
-    p.setAttribute('fill','none'); p.setAttribute('stroke',color);
-    p.setAttribute('stroke-width', e.kind==='support'?1:1.6);
-    if(e.kind==='support') p.setAttribute('stroke-dasharray','3,3');
-    p.setAttribute('opacity','0.75'); p.setAttribute('marker-end','url(#arw)');
-    svg.appendChild(p);
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', 'M'+x1+','+y1+' C'+mid+','+y1+' '+mid+','+y2+' '+x2+','+y2);
+    path.setAttribute('fill','none'); path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', e.kind==='support' ? 1 : 1.6);
+    if(e.kind==='support') path.setAttribute('stroke-dasharray','3,3');
+    path.setAttribute('opacity','0.7'); path.setAttribute('marker-end','url(#arw)');
+    svg.appendChild(path);
   });
 
   // 节点
@@ -183,56 +234,89 @@ function drawTree(){
     grp.setAttribute('cursor','pointer');
     const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
     rect.setAttribute('x', p.x); rect.setAttribute('y', p.y);
-    rect.setAttribute('width', 168); rect.setAttribute('height', 22); rect.setAttribute('rx', 4);
+    rect.setAttribute('width', NW); rect.setAttribute('height', isTask ? NH_TASK : NH_FACT); rect.setAttribute('rx', 4);
     rect.setAttribute('fill', '#131d31'); rect.setAttribute('stroke', color);
     rect.setAttribute('stroke-width', state.sel === n.id ? 2.2 : 1);
+    if(n.view && n.view.state === 'merged') rect.setAttribute('opacity', '0.5');
     grp.appendChild(rect);
+
     const label = document.createElementNS('http://www.w3.org/2000/svg','text');
     label.setAttribute('x', p.x + 7); label.setAttribute('y', p.y + 15);
     label.setAttribute('fill', '#e6edf7'); label.setAttribute('font-size', '10.5');
     const text = isTask ? ('T '+n.id+' '+n.title) : (n.id+' '+(n.content||''));
-    label.textContent = text.length > 24 ? text.slice(0,23)+'…' : text;
+    label.textContent = text.length > 26 ? text.slice(0,25)+'…' : text;
     grp.appendChild(label);
 
-    // 状态徽标 + 计时器（只画有 view 的任务节点）
+    let badge = null;
     if(isTask && n.view){
-      const badge = document.createElementNS('http://www.w3.org/2000/svg','text');
-      badge.setAttribute('x', p.x + 7); badge.setAttribute('y', p.y + 33);
+      badge = document.createElementNS('http://www.w3.org/2000/svg','text');
+      badge.setAttribute('x', p.x + 7); badge.setAttribute('y', p.y + 31);
       badge.setAttribute('fill', color); badge.setAttribute('font-size', '9.5');
-      let extra = '';
-      if(n.view.state === 'running') extra = ' · 已跑 ' + dur(n.view.run);
-      else if(n.view.state === 'pending') extra = ' · 已等 ' + dur(n.view.wait);
-      else if(n.view.state === 'stalled') extra = ' · 失联 ' + dur(n.view.stale_for);
-      else if(n.view.state === 'done') extra = ' · 用时 ' + dur(n.view.total);
-      badge.textContent = n.view.label + extra;
       grp.appendChild(badge);
-      rect.setAttribute('height', 40);
-      rect.setAttribute('opacity', n.view.state === 'merged' ? '0.45' : '1');
+      nodeEls[n.id] = { badge, view: n.view, stamp: Date.now() };
+    } else if(!isTask){
+      const ev = document.createElementNS('http://www.w3.org/2000/svg','text');
+      ev.setAttribute('x', p.x + NW - 46); ev.setAttribute('y', p.y + 15);
+      ev.setAttribute('fill', TONE[{accepted:'green',candidate:'amber',rejected:'red',negated:'grey',unverified:'blue'}[n.evidence_status] || 'grey'] || '#7c8aa0');
+      ev.setAttribute('font-size', '9');
+      ev.textContent = n.evidence_status === 'unverified' ? '' : n.evidence_status;
+      grp.appendChild(ev);
     }
-    grp.onclick = () => { state.sel = n.id; renderDetail(n); drawTree(); };
+    grp.onclick = () => { state.sel = n.id; renderDetail(n); drawTree(true); };
     svg.appendChild(grp);
+  });
+  updateTimers();
+}
+
+function updateTimers(){
+  // 不重建 DOM，只改文字 —— 每秒跑一次也不心疼
+  const now = Date.now();
+  Object.keys(nodeEls).forEach(id => {
+    const o = nodeEls[id], v = o.view; if(!v || !o.badge) return;
+    const delta = (now - o.stamp) / 1000;      // 数据到手后过了多少秒
+    let extra = '';
+    if(v.state === 'running') extra = ' · 已跑 ' + fmtDur(v.run + delta);
+    else if(v.state === 'pending') extra = ' · 已等 ' + fmtDur(v.wait + delta);
+    else if(v.state === 'stalled') extra = ' · 失联 ' + fmtDur(v.stale_for + delta);
+    else if(v.state === 'done') extra = ' · 用时 ' + fmtDur(v.total);
+    o.badge.textContent = v.label + extra;
   });
 }
 
+
 function renderDetail(n){
   document.getElementById('detailHint').textContent = n.id;
+  const TONE = {green:'#3ddc84', red:'#ff5f56', amber:'#ffc857', grey:'#7c8aa0', violet:'#b08cff', blue:'#5aa9ff'};
   const rows = [];
-  rows.push('<div class="detail"><h3>'+esc(n.id)+' · '+(n.type==='task'?'任务':'事实')+'</h3>');
   if(n.type === 'task'){
     const v = n.view || {};
-    rows.push('<div class="meta">状态 <b style="color:'+({green:'#3ddc84',red:'#ff5f56',amber:'#ffc857',grey:'#7c8aa0',violet:'#b08cff'}[v.tone]||'#9fb0c9')+'">'+esc(v.label||n.status)+'</b>'
-      + ' · 等 '+dur(v.wait||0)+' · 跑 '+dur(v.run||0)+' · 共 '+dur(v.total||0)+'</div>');
+    rows.push('<div class="detail"><h3>'+esc(n.id)+' · 任务</h3>');
+    rows.push('<div style="color:'+(TONE[v.tone]||'#9fb0c9')+';margin:2px 0 6px">'+esc(v.label||n.status)+'</div>');
     rows.push('<div>'+esc(n.title)+'</div>');
-    rows.push('<div class="meta" style="margin-top:4px">'+esc(n.detail)+'</div>');
-    rows.push('<div class="meta">依据 '+(n.from_facts||[]).join(',')+' → 产出 '+(n.produced||[]).join(',')+'</div>');
-    if(n.result) rows.push('<div class="meta" style="margin-top:4px">结论：'+esc(n.result)+'</div>');
+    rows.push('<div class="meta" style="margin-top:4px">'+esc(n.detail||'')+'</div>');
+    rows.push('<div class="meta" style="margin-top:6px">等 '+dur(v.wait||0)+' · 跑 '+dur(v.run||0)+' · 共 '+dur(v.total||0)+(n.worker?' · 执行者 '+esc(n.worker):'')+'</div>');
+    rows.push('<div class="meta">依据 '+((n.from_facts||[]).map(f=>'<a href="#" data-goto="'+esc(f)+'">'+esc(f)+'</a>').join(' ')||'(无)'));
+    rows.push(' → 产出 '+((n.produced||[]).map(f=>'<a href="#" data-goto="'+esc(f)+'">'+esc(f)+'</a>').join(' ')||'(无)')+'</div>');
+    if(n.merged_into) rows.push('<div class="meta">已合并到 <a href="#" data-goto="'+esc(n.merged_into)+'">'+esc(n.merged_into)+'</a></div>');
+    if(n.result) rows.push('<div class="meta" style="margin-top:6px;color:#9fb0c9">结论：'+esc(n.result)+'</div>');
   } else {
-    rows.push('<div class="meta">类型 '+esc(n.kind)+' · 产出者 '+esc(n.produced_by||'-')+' · 依据 '+(n.refs||[]).join(',')+'</div>');
-    rows.push('<div>'+esc(n.content)+'</div>');
+    const evc = {accepted:'#3ddc84',candidate:'#ffc857',rejected:'#ff5f56',negated:'#7c8aa0',unverified:'#5aa9ff'}[n.evidence_status]||'#7c8aa0';
+    rows.push('<div class="detail"><h3>'+esc(n.id)+' · 事实</h3>');
+    rows.push('<div class="meta">类型 '+esc(n.kind)+' · 证据 <span style="color:'+evc+'">'+esc(n.evidence_status||'unverified')+'</span></div>');
+    rows.push('<div style="margin-top:4px">'+esc(n.content)+'</div>');
+    rows.push('<div class="meta" style="margin-top:6px">产出者 '+(n.produced_by?'<a href="#" data-goto="'+esc(n.produced_by)+'">'+esc(n.produced_by)+'</a>':'(无)')+'</div>');
+    if((n.refs||[]).length) rows.push('<div class="meta">依据 '+(n.refs||[]).map(f=>'<a href="#" data-goto="'+esc(f)+'">'+esc(f)+'</a>').join(' ')+'</div>');
   }
   rows.push('</div>');
-  document.getElementById('detail').innerHTML = rows.join('');
+  const el = document.getElementById('detail');
+  el.innerHTML = rows.join('');
+  el.querySelectorAll('[data-goto]').forEach(a => a.onclick = (ev) => {
+    ev.preventDefault();
+    const target = (state.graph.nodes||[]).find(x => x.id === a.dataset.goto);
+    if(target){ state.sel = target.id; renderDetail(target); drawTree(true); }
+  });
 }
+
 
 // ── 中：泳道 ────────────────────────────────────────────────
 function drawLanes(lanes){
@@ -317,5 +401,7 @@ async function tick(){
 }
 document.getElementById('q').oninput = drawBoard;
 window.addEventListener('resize', () => { if(state.view === 'tree') drawTree(); });
-tick(); setInterval(tick, 2000);
+tick();
+setInterval(tick, 2000);
+setInterval(updateTimers, 1000);   // 计时器本地走字，不等服务器
 </script></body></html>
