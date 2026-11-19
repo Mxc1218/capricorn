@@ -172,11 +172,12 @@ function drawTree(){
   });
 
   // 节点
+  const TONE = {green:'#3ddc84', red:'#ff5f56', amber:'#ffc857', blue:'#5aa9ff', violet:'#b08cff', grey:'#7c8aa0'};
   g.nodes.forEach(n => {
     const p = pos[n.id]; if(!p) return;
     const isTask = n.type === 'task';
     const color = isTask
-      ? (n.status==='done' ? '#3ddc84' : (n.status==='failed' ? '#ff5f56' : (n.status==='running' ? '#ffc857' : '#7c8aa0')))
+      ? (TONE[(n.view && n.view.tone) || 'grey'] || '#7c8aa0')
       : ({host:'#5aa9ff',service:'#2dd4bf',vuln:'#ff5f56',cred:'#ffc857',loot:'#b08cff',flag:'#3ddc84'}[n.kind] || '#7c8aa0');
     const grp = document.createElementNS('http://www.w3.org/2000/svg','g');
     grp.setAttribute('cursor','pointer');
@@ -190,8 +191,24 @@ function drawTree(){
     label.setAttribute('x', p.x + 7); label.setAttribute('y', p.y + 15);
     label.setAttribute('fill', '#e6edf7'); label.setAttribute('font-size', '10.5');
     const text = isTask ? ('T '+n.id+' '+n.title) : (n.id+' '+(n.content||''));
-    label.textContent = text.length > 26 ? text.slice(0,25)+'…' : text;
+    label.textContent = text.length > 24 ? text.slice(0,23)+'…' : text;
     grp.appendChild(label);
+
+    // 状态徽标 + 计时器（只画有 view 的任务节点）
+    if(isTask && n.view){
+      const badge = document.createElementNS('http://www.w3.org/2000/svg','text');
+      badge.setAttribute('x', p.x + 7); badge.setAttribute('y', p.y + 33);
+      badge.setAttribute('fill', color); badge.setAttribute('font-size', '9.5');
+      let extra = '';
+      if(n.view.state === 'running') extra = ' · 已跑 ' + dur(n.view.run);
+      else if(n.view.state === 'pending') extra = ' · 已等 ' + dur(n.view.wait);
+      else if(n.view.state === 'stalled') extra = ' · 失联 ' + dur(n.view.stale_for);
+      else if(n.view.state === 'done') extra = ' · 用时 ' + dur(n.view.total);
+      badge.textContent = n.view.label + extra;
+      grp.appendChild(badge);
+      rect.setAttribute('height', 40);
+      rect.setAttribute('opacity', n.view.state === 'merged' ? '0.45' : '1');
+    }
     grp.onclick = () => { state.sel = n.id; renderDetail(n); drawTree(); };
     svg.appendChild(grp);
   });
@@ -202,7 +219,9 @@ function renderDetail(n){
   const rows = [];
   rows.push('<div class="detail"><h3>'+esc(n.id)+' · '+(n.type==='task'?'任务':'事实')+'</h3>');
   if(n.type === 'task'){
-    rows.push('<div class="meta">状态 '+esc(n.status)+'</div>');
+    const v = n.view || {};
+    rows.push('<div class="meta">状态 <b style="color:'+({green:'#3ddc84',red:'#ff5f56',amber:'#ffc857',grey:'#7c8aa0',violet:'#b08cff'}[v.tone]||'#9fb0c9')+'">'+esc(v.label||n.status)+'</b>'
+      + ' · 等 '+dur(v.wait||0)+' · 跑 '+dur(v.run||0)+' · 共 '+dur(v.total||0)+'</div>');
     rows.push('<div>'+esc(n.title)+'</div>');
     rows.push('<div class="meta" style="margin-top:4px">'+esc(n.detail)+'</div>');
     rows.push('<div class="meta">依据 '+(n.from_facts||[]).join(',')+' → 产出 '+(n.produced||[]).join(',')+'</div>');

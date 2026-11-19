@@ -1,8 +1,4 @@
-{"id": "f001", "ts": 1795097555.810141, "kind": "host", "content": "127.0.0.1:8080 DVWA 靶场，admin/password 可登录", "source": "demo", "tags": []}
-{"id": "f002", "ts": 1795097555.8101704, "kind": "service", "content": "vulnerabilities/exec 页面存在命令注入，输入直接拼进 ping", "source": "demo", "tags": []}
-{"id": "f003", "ts": 1795097555.8101807, "kind": "vuln", "content": "注入点可用 & 串联命令；过滤了 cat / flag / ; 三个关键词", "source": "demo", "tags": []}
-{"id": "f004", "ts": 1795097555.8101873, "kind": "loot", "content": "回传通道：命令输出写到 hackable/found.txt，再 HTTP 取回", "source": "demo", "tags": []}
-{"id": "f005", "ts": 1795097555.8101926, "kind": "note", "content": "[failed] 找 flag：全盘 dir /s 被 60 秒工具超时掐断", "source": "demo", "tags": []}
-{"id": "f006", "ts": 1795098451.4862244, "kind": "host", "content": "127.0.0.1:8080 DVWA，admin/password 可登录", "source": "plan", "tags": [], "refs": [], "produced_by": ""}
-{"id": "f007", "ts": 1795098451.4865587, "kind": "vuln", "content": "vulnerabilities/exec 有命令注入", "source": "agent", "tags": [], "refs": ["f006"], "produced_by": "t001"}
-{"id": "f008", "ts": 1795098451.4868412, "kind": "loot", "content": "回传通道：写 hackable/found.txt 再 HTTP 取", "source": "agent", "tags": [], "refs": ["f007"], "produced_by": "t002"}
+{"id": "f001", "ts": 1795100668.938048, "kind": "host", "content": "127.0.0.1:8080 DVWA 靶场", "source": "plan", "tags": [], "refs": [], "produced_by": "", "evidence_status": "accepted"}
+{"id": "f002", "ts": 1795100768.938048, "kind": "vuln", "content": "exec 页面有命令注入", "source": "agent", "tags": [], "refs": ["f001"], "produced_by": "t001", "evidence_status": "accepted"}
+{"id": "f003", "ts": 1795100968.938048, "kind": "loot", "content": "回传通道：写 found.txt 再取", "source": "agent", "tags": [], "refs": ["f002"], "produced_by": "t002", "evidence_status": "accepted"}
+{"id": "f004", "ts": 1795101068.938048, "kind": "flag", "content": "疑似 flag{dvwa_demo}", "source": "agent", "tags": [], "refs": ["f003"], "produced_by": "t003", "evidence_status": "candidate"}

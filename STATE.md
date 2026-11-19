@@ -1,58 +1,65 @@
 # 当前状态（交接用）
 
 > 换会话、换人、或者三个月后回来看，先读这一页。
-> **规矩：边做边改，不要等到收工才写。** 收工时人已经累了，写出来的都是糊的。
-> 最后更新：2026-11-13
+> **规矩：边做边改，不要等到收工才写。**
+> 最后更新：2026-11-19
 
 ## 目标
 
-一句话：**造一把能回答「这次改动有没有用」的尺子**，顺带把 agent 的 token 花在哪看清楚。
+一句话：**造一把能回答「这次改动有没有用」的尺子**，顺带把 agent 的 token 花在哪、卡在哪看清楚。
 
 ## 现在在哪
 
 ```
 仓库    https://github.com/Mxc1218/capricorn
 分支    main
-HEAD    e0567bb
-规模    989 行 Python（agentlab + eval + tests）
+规模    agentlab + eval + viz + tests，测试 14 项全过
 ```
 
-## 已验证的事实（都有证据路径）
+## 已完成（按时间）
+
+| 块 | 内容 | 证据 |
+|---|---|---|
+| 内核 | ReAct 循环 + 4 工具 + trace + 墙钟预算 + 路径隔离 | `runs/*.jsonl` |
+| 评测台 | 题目/答案隔离、判分、报告、可读复盘 | `eval/results/*/summary.md` |
+| 黑板 | 只追加、类型固定、一行摘要 + read_fact 取全文 | `eval/boards/*.jsonl` |
+| 角色分工 | 规划者（JSON 契约）+ N 执行者（线程并发） | `agentlab/orchestrator.py` |
+| M1 数据 | 三段计时 / 证据分级 / merge 边 | `agentlab/tasks.py`、`board.py`、`state.py` |
+| M2 执行态 | 状态徽标 + 计时器 + 失联判定 + 合并置灰 | `viz/` |
+
+## 已验证的事实
 
 | 事实 | 证据 |
 |---|---|
-| 内核能跑通真实任务 | `runs/run-20261113-181549.jsonl`：5 步、8936 prompt / 1482 completion / 7424 缓存 |
-| 缓存命中率 83% | 同上，DeepSeek 的 Anthropic 兼容端点前缀缓存确实生效 |
-| 判分链路可用 | `eval/results/run-20261113-202009/summary.md`：stub runner 2/2 |
-| 路径隔离生效 | 自测：`../escape.txt` 被 `PermissionError` 拦 |
-| 三个假模型测试通过 | `pytest tests` → 3 passed |
+| 内核能跑真任务 | 5 步跑完一次文件统计；缓存命中 83% |
+| 判分链路可用 | stub runner 2/2 |
+| 路径隔离生效 | `../escape.txt` 被拦 |
+| 可交互任务比纯推理任务省 8 倍输出 | DVWA 10k completion vs babyprng 87k |
+| 打穿 DVWA 但拿不到"位置未知的 flag" | `eval/results/run-20261119-215240` |
 
-## 未验证的假设（别当结论用）
+## 未验证的假设
 
-- **「pi 适合当内核」**：没实测过，只是它是 MIT 且语言无关。
-- **「上下文压缩能省 30 倍」**：那是从 `proj_003` 的图算出来的理论值（全量 39k token/轮 vs 增量 3.9k），没有真实对照。
-- **「同一批题跑三次方差很小」**：完全没测。
+- 「pi 适合当内核」—— 没实测
+- 「上下文压缩省 30 倍」—— 理论值（全量 39k/轮 vs 增量 3.9k），无对照
+- 「编排比单 agent 强」—— 代码有了，**还没在同一道题上对比过**
 
-## 下一步（按顺序，最多做前两条）
+## 下一步
 
-1. **扩到 10 道题**（crypto 5 + misc 5，来自 Alibaba CTF），跑出第一份基线报告
-2. **加 pi runner**（子进程 CLI），形成"自己写的 vs 借的核"对照
-3. 上下文压缩第一版 + 前后对比
-4. 方差测试（同批题 ×3）
+1. **M3 推理树**：泳道布局 + 增量重绘（心跳不重画）+ 详情面板完整化
+2. **M4 视图齐全**：总览 / 当前方向 / 全量推导图 / 画布专注 + 筛选器
+3. 拿 DVWA 跑一次**编排**，和单 agent 的 32 次调用对比
+4. 上下文压缩第一版
 
-## 踩过的坑（带现场，别再踩）
+## 踩过的坑
 
-- **文件工具路径基准**：相对路径原来按进程 cwd 解析，和 `run_shell` 的 `cd` 不一致 → agent 把文件写到仓库根。已修，见 DESIGN.md 决策 6。
-- **没有墙钟预算**：agent 跑 `factorint` 分解 1024 位数，卡死 20 分钟，步数计数器不动。已加 `deadline_s`。
-- **Windows 输出编码**：`text=True, encoding="utf-8"` 会让 cmd.exe 的中文报错变乱码，模型读不懂、连烧三步。改为先 utf-8 再 gbk。
-- **环境不自述**：不提"你在 Windows/cmd.exe"，模型会先跑 `ls` 再跑 `dir` 再跑 `cd`。
+- **文件工具路径基准**：相对路径按进程 cwd 解析，和 run_shell 的 cd 不一致 → 已修
+- **没有墙钟预算**：agent 跑 factorint 卡死 20 分钟 → 已加 deadline_s
+- **reasoning 被丢弃**：DeepSeek 的思考在 `message.reasoning_content`，只取 content 等于盲飞 → 已修
+- **题面是容器格式**：`/data/`、`/logs/agent/flag.txt`、`challenge:1337` 本地都不存在，agent 白烧 9 步 → 用题前必须先本地化
+- **TaskStore 默认路径**：原来落当前目录，不同任务串同一个文件 → 改落 workdir
+- **演示/真实数据路径不一致**：结果 json 要放在 `results/<run>/<task>.json`，放深一层列表就读不到
 
 ## 别碰的地方
 
-- `eval/answers/` —— 答案目录，**任何情况下都不要放进题目的工作目录**
-- 任何含 API Key 的文件（`.env`、本地 yaml）—— 密钥只进环境变量和本地文件，不进对话、不进仓库
-
-## 相关的另一摊
-
-Lucy（`E:\渗透agent\Lucy`）是另一个项目：Cairn 的衍生，AGPL-3.0，见那边的 `PROVENANCE.md`。
-**两个项目不要互相 import**，共享的只有"判断"，不共享代码。
+- `eval/answers/` —— 任何情况下都不许放进题目工作目录
+- 任何含 Key 的文件 —— 密钥只进环境变量和本地文件，不进对话、不进仓库

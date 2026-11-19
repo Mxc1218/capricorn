@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from agentlab.state import fact_tone, task_view
+
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
 RESULTS = PROJECT / "eval" / "results"
@@ -63,7 +65,7 @@ def list_runs():
             work = d / name / "work"
             traces = work / "traces"
             has_trace = traces.exists() and any(traces.glob("*.jsonl"))
-            has_graph = (work / "tasks.jsonl").exists() or (d / name / "tasks.jsonl").exists()                         or (BOARDS / (name + ".jsonl")).exists()
+            has_graph = ((work / "tasks.jsonl").exists() or (d / name / "tasks.jsonl").exists()) and (BOARDS / (name + ".jsonl")).exists()
             tasks.append({
                 "has_trace": bool(has_trace),
                 "has_graph": bool(has_graph),
@@ -103,12 +105,27 @@ def load_graph(work: str):
     task_file = d / "tasks.jsonl"
     if not task_file.exists():
         task_file = d.parent / "tasks.jsonl"
+    import time as _time
+    now = _time.time()
+    hb = {}
+    if LIVE.exists():
+        for f in LIVE.glob("*.json"):
+            d2 = read_json(f, {}) or {}
+            if d2.get("worker"):
+                hb[d2["worker"]] = d2.get("updated") or 0
     if task_file.exists():
         folded = {}
         for rec in read_jsonl(task_file):
             folded[rec.get("id")] = rec
         for tid, t in folded.items():
+            from types import SimpleNamespace
+
+            view = task_view(SimpleNamespace(
+                created=t.get("created") or 0, started_at=t.get("started_at") or 0,
+                ended_at=t.get("ended_at") or 0, status=t.get("status") or "pending",
+                updated=t.get("updated") or 0), now=now, heartbeat=hb.get(t.get("worker") or tid))
             nodes.append({"id": tid, "type": "task", "title": t.get("title", ""),
+                          "view": view,
                           "status": t.get("status", ""), "result": (t.get("result") or "")[:200],
                           "detail": (t.get("detail") or "")[:300],
                           "created": t.get("created") or 0, "updated": t.get("updated") or 0,
