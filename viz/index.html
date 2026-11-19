@@ -3,193 +3,300 @@
 <meta charset="utf-8"><title>摩羯 · 调试台</title>
 <style>
 :root{--bg:#0b1220;--panel:#111a2c;--line:#22304a;--fg:#e6edf7;--fg2:#9fb0c9;
---green:#3ddc84;--red:#ff5f56;--amber:#ffc857;--blue:#5aa9ff;--violet:#b08cff;--grey:#7c8aa0}
+--green:#3ddc84;--red:#ff5f56;--amber:#ffc857;--blue:#5aa9ff;--violet:#b08cff;--grey:#7c8aa0;--teal:#2dd4bf}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.6 ui-monospace,Consolas,monospace}
-header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)}
-h1{font-size:14px;margin:0;font-weight:600}
+header{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line)}
+h1{font-size:13px;margin:0;font-weight:600}
+button{background:var(--panel);color:var(--fg2);border:1px solid var(--line);border-radius:5px;padding:3px 9px;font:inherit;cursor:pointer}
+button.on{color:var(--fg);border-color:#3a4d70;background:#16223a}
 .tag{font-size:11px;color:var(--fg2);border:1px solid var(--line);padding:1px 6px;border-radius:4px}
-main{display:grid;grid-template-columns:250px 1fr 420px;height:calc(100vh - 46px)}
-.col{border-right:1px solid var(--line);overflow:auto;padding:10px}
+main{display:grid;grid-template-columns:230px 1fr 400px;height:calc(100vh - 43px)}
+.col{border-right:1px solid var(--line);overflow:auto;padding:9px}
 .col:last-child{border-right:none}
-.sec{font-size:11px;color:var(--fg2);letter-spacing:.08em;margin:12px 0 6px}
+.sec{font-size:11px;color:var(--fg2);letter-spacing:.08em;margin:10px 0 5px}
 .sec:first-child{margin-top:0}
-.item{padding:6px 8px;border:1px solid transparent;border-radius:5px;cursor:pointer;margin-bottom:4px}
+.item{padding:5px 7px;border:1px solid transparent;border-radius:5px;cursor:pointer;margin-bottom:3px}
 .item:hover{background:var(--panel)}
 .item.sel{background:var(--panel);border-color:var(--line)}
 .ok{color:var(--green)} .bad{color:var(--red)} .warn{color:var(--amber)}
 .meta{font-size:11px;color:var(--fg2)}
-.fact{padding:5px 8px;border-left:3px solid var(--line);margin-bottom:5px;background:var(--panel);border-radius:0 4px 4px 0}
+.fact{padding:4px 7px;border-left:3px solid var(--line);margin-bottom:4px;background:var(--panel);border-radius:0 4px 4px 0}
 .k-host{border-color:var(--blue)} .k-vuln{border-color:var(--red)} .k-cred{border-color:var(--amber)}
 .k-loot{border-color:var(--violet)} .k-flag{border-color:var(--green)} .k-note{border-color:var(--grey)}
-.k-service{border-color:#2dd4bf}
-.fid{color:var(--fg2);font-size:11px;margin-right:6px}
-.ev{padding:6px 8px;border-bottom:1px dashed var(--line)}
-.ev .h{display:flex;gap:8px;align-items:baseline}
-.ev pre{margin:4px 0 0;white-space:pre-wrap;word-break:break-all;color:var(--fg2);font-size:11.5px;max-height:160px;overflow:auto}
-.live{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;background:var(--panel)}
-.pulse{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.k-service{border-color:var(--teal)}
+.fid{color:var(--fg2);font-size:11px;margin-right:5px}
+.ev{padding:5px 7px;border-bottom:1px dashed var(--line)}
+.ev pre{margin:3px 0 0;white-space:pre-wrap;word-break:break-all;color:var(--fg2);font-size:11px;max-height:150px;overflow:auto}
+.live{border:1px solid var(--line);border-radius:6px;padding:7px;margin-bottom:7px;background:var(--panel)}
+.pulse{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;background:var(--grey)}
 .pulse.on{background:var(--green);animation:p 1.2s infinite}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
-input{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--fg);
-padding:5px 8px;border-radius:5px;font:inherit;margin-bottom:8px}
+input{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--fg);padding:4px 7px;border-radius:5px;font:inherit;margin-bottom:6px}
+#canvas{width:100%;height:100%;background:
+  radial-gradient(circle at 1px 1px, #1b2740 1px, transparent 0) 0 0/22px 22px}
+.pane{display:none} .pane.on{display:block}
+.legend{position:absolute;right:12px;bottom:10px;background:rgba(11,18,32,.9);border:1px solid var(--line);
+border-radius:6px;padding:6px 9px;font-size:11px;color:var(--fg2)}
+.chip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}
+.detail{border:1px solid var(--line);border-radius:6px;padding:8px;background:var(--panel);margin-bottom:8px}
+.detail h3{margin:0 0 4px;font-size:12px}
 </style></head><body>
 <header>
   <h1>摩羯 · 调试台</h1>
+  <div aria-label="视图"><button data-view="tree" class="on">推理树</button><button data-view="lanes">泳道</button><button data-view="board">黑板</button></div>
   <span class="tag" id="status">连接中…</span>
-  <span class="tag">只读</span>
-  <span class="meta" id="clock"></span>
+  <span class="meta" id="stats"></span>
+  <span class="meta" id="clock" style="margin-left:auto"></span>
 </header>
 <main>
   <div class="col">
     <div class="sec">实时执行者</div><div id="live"></div>
     <div class="sec">运行记录</div><div id="runs"></div>
   </div>
-  <div class="col">
-    <div class="sec">黑板 <span class="meta" id="boardCount"></span></div>
-    <input id="q" placeholder="过滤黑板…">
-    <div id="board"></div>
+  <div class="col" style="position:relative;padding:0;overflow:hidden">
+    <div class="pane on" id="pane-tree" style="width:100%;height:100%"><svg id="canvas"></svg></div>
+    <div class="pane" id="pane-lanes" style="padding:9px"></div>
+    <div class="pane" id="pane-board" style="padding:9px"><input id="q" placeholder="过滤黑板…"><div id="board"></div></div>
+    <div class="legend">
+      <div><span class="chip" style="background:#5aa9ff"></span>事实</div>
+      <div><span class="chip" style="background:#3ddc84"></span>任务已完成</div>
+      <div><span class="chip" style="background:#ffc857"></span>任务进行中</div>
+      <div><span class="chip" style="background:#ff5f56"></span>任务失败</div>
+    </div>
   </div>
   <div class="col">
-    <div class="sec">步骤 <span class="meta" id="traceHint">选一次运行</span></div>
+    <div class="sec">详情 <span class="meta" id="detailHint">点一个节点</span></div>
+    <div id="detail"></div>
+    <div class="sec">步骤 <span class="meta" id="traceHint"></span></div>
     <div id="trace"></div>
   </div>
 </main>
 <script>
-let selTask = null, selWork = null, boardCache = [];
+let state = { runs: [], live: [], graph: {nodes:[],edges:[]}, board: [], selTask:null, selWork:null, view:'tree', sel:null };
 
 const fmt = s => s == null ? '-' : (s >= 1000 ? (s/1000).toFixed(1)+'k' : s);
-const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-
+const esc = s => String(s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const dur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? s+'s' : (s<3600? Math.floor(s/60)+'m'+(s%60)+'s' : Math.floor(s/3600)+'h'+Math.floor(s%3600/60)+'m'); };
 async function getJson(url){ try{ const r = await fetch(url); return await r.json(); }catch(e){ return null; } }
 
+// ── 视图切换 ────────────────────────────────────────────────
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
+  state.view = b.dataset.view;
+  document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
+  ['tree','lanes','board'].forEach(v => document.getElementById('pane-'+v).classList.toggle('on', v === state.view));
+  if(state.view === 'tree') drawTree();
+});
+
+// ── 左：实时 + 运行 ─────────────────────────────────────────
 function renderLive(list){
   const el = document.getElementById('live');
   if(!list || !list.length){ el.innerHTML = '<div class="meta">(没有正在跑的)</div>'; return; }
   el.innerHTML = list.map(d => {
     const on = d.status === 'running';
-    const tok = d.tokens ? (fmt(d.tokens.prompt)+' + '+fmt(d.tokens.completion) + (d.tokens.reasoning? ' (想 '+fmt(d.tokens.reasoning)+')':'')) : '-';
-    return '<div class="live">'
-      + '<div><span class="pulse '+(on?'on':'')+'"></span><b>'+esc(d.worker)+'</b> '
-      + '<span class="meta">'+esc(d.status)+'</span></div>'
-      + '<div class="meta">任务：'+esc(d.task)+'</div>'
+    const tok = d.tokens ? (fmt(d.tokens.prompt)+' + '+fmt(d.tokens.completion)) : '-';
+    return '<div class="live"><div><span class="pulse '+(on?'on':'')+'"></span><b>'+esc(d.worker)+'</b> <span class="meta">'+esc(d.status)+'</span></div>'
+      + '<div class="meta">'+esc(d.task)+'</div>'
       + '<div class="meta">第 '+(d.step||0)+' 步 · '+esc(d.phase||'')+' · '+tok+'</div>'
-      + (d.tool ? '<div class="meta">工具：'+esc(d.tool)+'</div>' : '')
-      + (d.args ? '<pre style="margin:4px 0;color:#9fb0c9;font-size:11px;max-height:70px;overflow:auto">'+esc(d.args)+'</pre>' : '')
-      + (d.observation ? '<pre style="margin:0;color:#7c8aa0;font-size:11px;max-height:70px;overflow:auto">'+esc(d.observation)+'</pre>' : '')
-      + '</div>';
+      + (d.tool ? '<div class="meta">工具 '+esc(d.tool)+'</div>' : '') + '</div>';
   }).join('');
 }
-
 function renderRuns(runs){
   const el = document.getElementById('runs');
-  if(!runs || !runs.length){ el.innerHTML = '<div class="meta">(还没有运行记录)</div>'; return; }
-  el.innerHTML = runs.map(r => {
-    const items = (r.tasks||[]).map(t => {
-      const cls = t.solved ? 'ok' : 'bad';
-      const mark = t.solved ? '✓' : '✗';
-      return '<div class="item '+(selTask===t.task?'sel':'')+'" data-task="'+esc(t.task)+'" data-work="'+esc(t.work)+'">'
-        + '<div><span class="'+cls+'">'+mark+'</span> '+esc(t.task)+'</div>'
-        + '<div class="meta">'+fmt(t.elapsed_s)+'s · '+fmt(t.tokens)+' tok · '+(t.steps||0)+' 步</div>'
-        + '</div>';
-    }).join('');
-    return '<div class="meta" style="margin:6px 0 2px">'+esc(r.run)+'</div>' + items;
-  }).join('');
+  if(!runs || !runs.length){ el.innerHTML = '<div class="meta">(没有记录)</div>'; return; }
+  el.innerHTML = runs.map(r => (r.tasks||[]).map(t =>
+    '<div class="item '+(state.selTask===t.task?'sel':'')+'" data-task="'+esc(t.task)+'" data-work="'+esc(t.work)+'">'
+    + '<div><span class="'+(t.solved?'ok':'bad')+'">'+(t.solved?'✓':'✗')+'</span> '+esc(t.task)+'</div>'
+    + '<div class="meta">'+fmt(t.elapsed_s)+'s · '+fmt(t.tokens)+' tok · '+(t.steps||0)+' 步</div></div>').join('')
+  ).join('');
   el.querySelectorAll('.item').forEach(n => n.onclick = () => {
-    selTask = n.dataset.task; selWork = n.dataset.work;
-    document.querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
-    n.classList.add('sel');
-    loadBoard(); loadTrace();
+    state.selTask = n.dataset.task; state.selWork = n.dataset.work;
+    renderRuns(state.runs); refresh();
   });
 }
 
-function renderBoard(facts){
-  const q = document.getElementById('q').value.toLowerCase();
-  const el = document.getElementById('board');
-  document.getElementById('boardCount').textContent = '(' + facts.length + ' 条)';
-  const shown = facts.filter(f => !q || JSON.stringify(f).toLowerCase().includes(q));
-  el.innerHTML = shown.map(f => '<div class="fact k-'+(f.kind||'note')+'">'
-    + '<span class="fid">'+esc(f.id)+'</span><span class="meta">['+esc(f.kind)+']</span> '
-    + esc(f.content) + '</div>').join('') || '<div class="meta">(空)</div>';
+// ── 中：推理树（分层布局）───────────────────────────────────
+function drawTree(){
+  const svg = document.getElementById('canvas');
+  const g = state.graph;
+  const box = svg.getBoundingClientRect();
+  const W = Math.max(600, box.width || 800), H = Math.max(400, box.height || 600);
+  svg.setAttribute('viewBox', '0 0 '+W+' '+H);
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+  if(!g.nodes.length){
+    svg.innerHTML = '<text x="20" y="40" fill="#7c8aa0" font-size="12">（没有数据：先跑一次编排，或选一个运行）</text>';
+    return;
+  }
+
+  // 分层：没有入边的在第一层，其余取前驱最大层 +1
+  const byId = {}; g.nodes.forEach(n => byId[n.id] = n);
+  const preds = {}; g.nodes.forEach(n => preds[n.id] = []);
+  g.edges.forEach(e => { if(preds[e.to]) preds[e.to].push(e.from); });
+  const layer = {}; const seen = new Set();
+  function depth(id, guard){
+    if(layer[id] != null) return layer[id];
+    if(guard.has(id)) return 0; guard.add(id);
+    const ps = (preds[id]||[]).filter(p => byId[p]);
+    const d = ps.length ? Math.max(...ps.map(p => depth(p, guard))) + 1 : 0;
+    layer[id] = Math.min(d, 20); guard.delete(id); return layer[id];
+  }
+  g.nodes.forEach(n => depth(n.id, seen));
+
+  const cols = {}; g.nodes.forEach(n => { (cols[layer[n.id]] = cols[layer[n.id]] || []).push(n); });
+  const colW = Math.min(210, (W - 60) / Math.max(1, Object.keys(cols).length));
+  const pos = {};
+  Object.keys(cols).forEach(k => {
+    const list = cols[k], cw = 178, gapY = (H - 50) / Math.max(1, list.length);
+    list.forEach((n, i) => { pos[n.id] = { x: 24 + k*colW, y: 34 + i*gapY + gapY/2 }; });
+  });
+
+  const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+  defs.innerHTML = '<marker id="arw" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#3a4d70"/></marker>';
+  svg.appendChild(defs);
+
+  // 边
+  g.edges.forEach(e => {
+    const a = pos[e.from], b = pos[e.to];
+    if(!a || !b) return;
+    const color = e.kind === 'produce' ? '#b08cff' : (e.kind === 'support' ? '#3a4d70' : '#ffc857');
+    const x1 = a.x + 168, y1 = a.y + 11, x2 = b.x, y2 = b.y + 11;
+    const mid = (x1 + x2) / 2;
+    const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d', 'M'+x1+','+y1+' C'+mid+','+y1+' '+mid+','+y2+' '+x2+','+y2);
+    p.setAttribute('fill','none'); p.setAttribute('stroke',color);
+    p.setAttribute('stroke-width', e.kind==='support'?1:1.6);
+    if(e.kind==='support') p.setAttribute('stroke-dasharray','3,3');
+    p.setAttribute('opacity','0.75'); p.setAttribute('marker-end','url(#arw)');
+    svg.appendChild(p);
+  });
+
+  // 节点
+  g.nodes.forEach(n => {
+    const p = pos[n.id]; if(!p) return;
+    const isTask = n.type === 'task';
+    const color = isTask
+      ? (n.status==='done' ? '#3ddc84' : (n.status==='failed' ? '#ff5f56' : (n.status==='running' ? '#ffc857' : '#7c8aa0')))
+      : ({host:'#5aa9ff',service:'#2dd4bf',vuln:'#ff5f56',cred:'#ffc857',loot:'#b08cff',flag:'#3ddc84'}[n.kind] || '#7c8aa0');
+    const grp = document.createElementNS('http://www.w3.org/2000/svg','g');
+    grp.setAttribute('cursor','pointer');
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('x', p.x); rect.setAttribute('y', p.y);
+    rect.setAttribute('width', 168); rect.setAttribute('height', 22); rect.setAttribute('rx', 4);
+    rect.setAttribute('fill', '#131d31'); rect.setAttribute('stroke', color);
+    rect.setAttribute('stroke-width', state.sel === n.id ? 2.2 : 1);
+    grp.appendChild(rect);
+    const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+    label.setAttribute('x', p.x + 7); label.setAttribute('y', p.y + 15);
+    label.setAttribute('fill', '#e6edf7'); label.setAttribute('font-size', '10.5');
+    const text = isTask ? ('T '+n.id+' '+n.title) : (n.id+' '+(n.content||''));
+    label.textContent = text.length > 26 ? text.slice(0,25)+'…' : text;
+    grp.appendChild(label);
+    grp.onclick = () => { state.sel = n.id; renderDetail(n); drawTree(); };
+    svg.appendChild(grp);
+  });
 }
 
-function renderTrace(lanes){
-  const el = document.getElementById('trace');
-  document.getElementById('traceHint').textContent = selTask ? selTask : '选一次运行';
-  if(!lanes || !lanes.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
+function renderDetail(n){
+  document.getElementById('detailHint').textContent = n.id;
+  const rows = [];
+  rows.push('<div class="detail"><h3>'+esc(n.id)+' · '+(n.type==='task'?'任务':'事实')+'</h3>');
+  if(n.type === 'task'){
+    rows.push('<div class="meta">状态 '+esc(n.status)+'</div>');
+    rows.push('<div>'+esc(n.title)+'</div>');
+    rows.push('<div class="meta" style="margin-top:4px">'+esc(n.detail)+'</div>');
+    rows.push('<div class="meta">依据 '+(n.from_facts||[]).join(',')+' → 产出 '+(n.produced||[]).join(',')+'</div>');
+    if(n.result) rows.push('<div class="meta" style="margin-top:4px">结论：'+esc(n.result)+'</div>');
+  } else {
+    rows.push('<div class="meta">类型 '+esc(n.kind)+' · 产出者 '+esc(n.produced_by||'-')+' · 依据 '+(n.refs||[]).join(',')+'</div>');
+    rows.push('<div>'+esc(n.content)+'</div>');
+  }
+  rows.push('</div>');
+  document.getElementById('detail').innerHTML = rows.join('');
+}
 
-  // ── 泳道：一行一个执行者，横轴步数，方块是工具调用 ──────────────
-  const rowH = 34, padL = 8, blockW = 26, maxSteps = Math.max(1, ...lanes.map(l => Math.max(...l.events.filter(e=>e.kind==='tool').map(e=>e.step||1), 1)));
-  const W = padL + maxSteps * blockW + 8;
-  let svg = '<svg width="100%" height="'+(lanes.length*rowH+8)+'" viewBox="0 0 '+W+' '+(lanes.length*rowH+8)+'" style="margin-bottom:10px">';
-  lanes.forEach((lane, i) => {
-    const y = i*rowH + 4;
-    svg += '<text x="2" y="'+(y+9)+'" fill="#9fb0c9" font-size="9">'+(i+1)+'</text>';
+// ── 中：泳道 ────────────────────────────────────────────────
+function drawLanes(lanes){
+  const el = document.getElementById('pane-lanes');
+  if(!lanes || !lanes.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
+  const rowH = 30, blockW = 24, maxSteps = Math.max(1, ...lanes.map(l => Math.max(...l.events.filter(e=>e.kind==='tool').map(e=>e.step||1), 1)));
+  let svg = '<svg width="100%" height="'+(lanes.length*rowH+10)+'" viewBox="0 0 '+(maxSteps*blockW+20)+' '+(lanes.length*rowH+10)+'">';
+  lanes.forEach((lane,i) => {
+    const y = i*rowH + 5;
     lane.events.filter(e=>e.kind==='tool').forEach(e => {
-      const x = padL + ((e.step||1)-1)*blockW;
+      const x = ((e.step||1)-1)*blockW;
       const fill = e.risk==='exec' ? '#ffc857' : (e.risk==='write' ? '#b08cff' : '#5aa9ff');
-      svg += '<rect x="'+x+'" y="'+(y+1)+'" width="'+(blockW-3)+'" height="18" rx="3" fill="'+fill+'" opacity="0.82">'
-           + '<title>第'+e.step+'步 '+esc(e.name)+'\n'+esc((e.args&&JSON.stringify(e.args)||'').slice(0,120))+'</title></rect>';
+      svg += '<rect x="'+x+'" y="'+y+'" width="'+(blockW-3)+'" height="16" rx="3" fill="'+fill+'" opacity="0.85"><title>第'+e.step+'步 '+esc(e.name)+'</title></rect>';
     });
   });
   svg += '</svg>';
-
-  // ── 逐步明细（点开看）────────────────────────────────────────
-  const body = lanes.map((lane, i) => {
-    const tools = lane.events.filter(e=>e.kind==='tool').length;
-    const models = lane.events.filter(e=>e.kind==='model');
-    const tok = models.reduce((a,m)=>a+((m.usage&&m.usage.completion)||0),0);
-    return '<details style="margin-bottom:6px"><summary class="meta">泳道 '+(i+1)+' · '+esc(lane.name)
-      +' · '+tools+' 次工具 · 出 '+fmt(tok)+' tok</summary>'
-      + lane.events.map(e => {
-          if(e.kind === 'model'){
-            const u2 = e.usage || {};
-            return '<div class="ev"><div class="h"><b>第 '+e.step+' 步</b><span class="meta">想 '+fmt(u2.reasoning)+' · 入 '+fmt(u2.prompt)+' · 出 '+fmt(u2.completion)+'</span></div>'
-              + (e.reasoning ? '<pre>'+esc(e.reasoning.slice(0,400))+'</pre>' : '') + '</div>';
-          }
-          if(e.kind === 'tool'){
-            const color = e.risk==='exec'?'warn':(e.risk==='write'?'violet':'blue');
-            return '<div class="ev"><div class="h"><span class="meta">第 '+e.step+' 步</span><b class="'+color+'">'+esc(e.name)+'</b></div>'
-              + '<pre>'+esc(JSON.stringify(e.args||{}).slice(0,300))+'</pre>'
-              + '<pre style="color:#7c8aa0">'+esc((e.observation||'').slice(0,300))+'</pre></div>';
-          }
-          return '';
-        }).join('')
-      + '</details>';
-  }).join('');
-
-  el.innerHTML = svg + body;
+  el.innerHTML = svg;
 }
 
-async function loadBoard(){
-  if(!selTask) return;
-  const facts = await getJson('/api/board?task='+encodeURIComponent(selTask)) || [];
-  boardCache = facts; renderBoard(facts);
+// ── 中：黑板 ────────────────────────────────────────────────
+function drawBoard(){
+  const q = document.getElementById('q').value.toLowerCase();
+  const facts = state.board.filter(f => !q || JSON.stringify(f).toLowerCase().includes(q));
+  document.getElementById('board').innerHTML = facts.map(f =>
+    '<div class="fact k-'+(f.kind||'note')+'"><span class="fid">'+esc(f.id)+'</span>'
+    + '<span class="meta">['+esc(f.kind)+']</span> '+esc(f.content)
+    + (f.produced_by ? ' <span class="meta">⊂'+esc(f.produced_by)+'</span>' : '')
+    + ((f.refs||[]).length ? ' <span class="meta">←'+esc(f.refs.join(','))+'</span>' : '')
+    + '</div>').join('') || '<div class="meta">(空)</div>';
 }
-async function loadTrace(){
-  if(!selWork) return;
-  const lanes = await getJson('/api/trace?work='+encodeURIComponent(selWork)) || [];
-  renderTrace(lanes);
+
+// ── 右：步骤 ────────────────────────────────────────────────
+function renderTrace(lanes){
+  const el = document.getElementById('trace');
+  document.getElementById('traceHint').textContent = state.selTask || '';
+  if(!lanes || !lanes.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
+  el.innerHTML = lanes.map((lane,i) => '<details style="margin-bottom:5px"><summary class="meta">泳道 '+(i+1)+' · '+esc(lane.name)+'</summary>'
+    + lane.events.map(e => {
+      if(e.kind === 'model'){
+        const u2 = e.usage || {};
+        return '<div class="ev"><div><b>第 '+e.step+' 步</b> <span class="meta">想 '+fmt(u2.reasoning)+' · 入 '+fmt(u2.prompt)+' · 出 '+fmt(u2.completion)+'</span></div>'
+          + (e.reasoning ? '<pre>'+esc(e.reasoning.slice(0,400))+'</pre>' : '') + '</div>';
+      }
+      if(e.kind === 'tool'){
+        return '<div class="ev"><div><span class="meta">第 '+e.step+' 步</span> <b class="warn">'+esc(e.name)+'</b></div>'
+          + '<pre>'+esc(JSON.stringify(e.args||{}).slice(0,300))+'</pre>'
+          + '<pre style="color:#7c8aa0">'+esc((e.observation||'').slice(0,300))+'</pre></div>';
+      }
+      return '';
+    }).join('') + '</details>').join('');
+}
+
+async function refresh(){
+  if(state.selTask){
+    state.board = await getJson('/api/board?task='+encodeURIComponent(state.selTask)) || [];
+    state.graph = await getJson('/api/graph?work='+encodeURIComponent(state.selWork)) || {nodes:[],edges:[]};
+    const lanes = await getJson('/api/trace?work='+encodeURIComponent(state.selWork)) || [];
+    renderTrace(lanes); drawLanes(lanes);
+  }
+  if(state.view === 'tree') drawTree();
+  if(state.view === 'board') drawBoard();
 }
 
 async function tick(){
-  const live = await getJson('/api/live');
-  renderLive(live);
-  const runs = await getJson('/api/runs');
-  renderRuns(runs);
-  // 首次进入自动选一个，否则右边的黑板和步骤永远是空的
-  if(!selTask && runs && runs.length){
-    // 优先选有 trace 的那次，否则右边永远是空的
+  state.live = await getJson('/api/live') || [];
+  renderLive(state.live);
+  state.runs = await getJson('/api/runs') || [];
+  renderRuns(state.runs);
+  if(!state.selTask && state.runs.length){
     let pick = null;
-    for(const r of runs){ for(const t of (r.tasks||[])){ if(t.has_trace){ pick = t; break; } } if(pick) break; }
-    if(!pick){ for(const r of runs){ const t = (r.tasks||[])[0]; if(t){ pick = t; break; } } }
-    if(pick){ selTask = pick.task; selWork = pick.work; renderRuns(runs); loadBoard(); loadTrace(); }
+    // 优先选「有因果图」的那次：树视图才有东西可画
+    for(const r of state.runs){ for(const t of (r.tasks||[])){ if(t.has_graph){ pick = t; break; } } if(pick) break; }
+    if(!pick) for(const r of state.runs){ for(const t of (r.tasks||[])){ if(t.has_trace){ pick = t; break; } } if(pick) break; }
+    if(!pick){ for(const r of state.runs){ const t=(r.tasks||[])[0]; if(t){ pick=t; break; } } }
+    if(pick){ state.selTask = pick.task; state.selWork = pick.work; renderRuns(state.runs); }
   }
-  if(selTask) await loadBoard();
-  if(selWork) await loadTrace();
-  document.getElementById('status').textContent = '在线 · 2s 刷新';
+  await refresh();
+  const g = state.graph;
+  document.getElementById('stats').textContent = g.nodes.length ? (g.nodes.length+' 节点 / '+g.edges.length+' 边') : '';
+  document.getElementById('status').textContent = '在线 · 2s';
   document.getElementById('clock').textContent = new Date().toLocaleTimeString();
 }
-document.getElementById('q').oninput = () => renderBoard(boardCache);
+document.getElementById('q').oninput = drawBoard;
+window.addEventListener('resize', () => { if(state.view === 'tree') drawTree(); });
 tick(); setInterval(tick, 2000);
 </script></body></html>

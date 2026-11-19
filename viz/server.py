@@ -60,10 +60,13 @@ def list_runs():
                 continue
             data = read_json(f, {}) or {}
             name = data.get("task", f.stem)
-            traces = d / name / "work" / "traces"
+            work = d / name / "work"
+            traces = work / "traces"
             has_trace = traces.exists() and any(traces.glob("*.jsonl"))
+            has_graph = (work / "tasks.jsonl").exists() or (d / name / "tasks.jsonl").exists()                         or (BOARDS / (name + ".jsonl")).exists()
             tasks.append({
                 "has_trace": bool(has_trace),
+                "has_graph": bool(has_graph),
                 "task": name,
                 "solved": data.get("solved"),
                 "elapsed_s": data.get("elapsed_s"),
@@ -106,7 +109,10 @@ def load_graph(work: str):
             folded[rec.get("id")] = rec
         for tid, t in folded.items():
             nodes.append({"id": tid, "type": "task", "title": t.get("title", ""),
-                          "status": t.get("status", ""), "result": (t.get("result") or "")[:200]})
+                          "status": t.get("status", ""), "result": (t.get("result") or "")[:200],
+                          "detail": (t.get("detail") or "")[:300],
+                          "created": t.get("created") or 0, "updated": t.get("updated") or 0,
+                          "from_facts": t.get("from_facts") or [], "produced": t.get("produced") or []})
             for fid in t.get("from_facts") or []:
                 edges.append({"from": fid, "to": tid, "kind": "trigger"})
             for fid in t.get("produced") or []:
@@ -117,7 +123,9 @@ def load_graph(work: str):
     if board_file.exists():
         for f in read_jsonl(board_file):
             nodes.append({"id": f.get("id"), "type": "fact", "kind": f.get("kind"),
-                          "content": (f.get("content") or "")[:200]})
+                          "content": (f.get("content") or "")[:200],
+                          "refs": f.get("refs") or [], "produced_by": f.get("produced_by") or "",
+                          "ts": f.get("ts") or 0})
             for ref in f.get("refs") or []:
                 # 事实之间是「支撑」关系，和任务那一侧的 trigger/produce 分开
                 edges.append({"from": ref, "to": f.get("id"), "kind": "support"})
