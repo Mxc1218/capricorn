@@ -22,7 +22,7 @@ def main(argv=None) -> int:
     ap.add_argument("--goal-file", default="", help="从 UTF-8 文件读目标（中文推荐用这个）")
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--rounds", type=int, default=3)
-    ap.add_argument("--task-steps", type=int, default=10)
+    ap.add_argument("--task-steps", type=int, default=10, help="0 = 不限步数，只靠时间预算")
     ap.add_argument("--task-seconds", type=int, default=300)
     ap.add_argument("--workdir", default=".")
     ap.add_argument("--board", default="board.jsonl")
@@ -30,6 +30,7 @@ def main(argv=None) -> int:
     ap.add_argument("--trace-dir", default="runs")
     ap.add_argument("--model", default=None)
     ap.add_argument("--check-url", default="", help="开跑前先探测这个 URL，不通就中止")
+    ap.add_argument("--total-minutes", type=int, default=0, help="整轮总时长上限（分钟），0 = 不限")
     args = ap.parse_args(argv)
 
     goal = args.goal
@@ -75,6 +76,7 @@ def main(argv=None) -> int:
         seconds_per_task=args.task_seconds,
         trace_dir=Path(args.trace_dir),
         live_dir=Path(args.live_dir),
+        total_seconds=int(args.total_minutes) * 60,
     )
     t0 = time.time()
     report = orch.run(goal)

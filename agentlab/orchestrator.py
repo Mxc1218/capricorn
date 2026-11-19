@@ -56,6 +56,7 @@ class Orchestrator:
         trace_dir: Path | None = None,
         live_dir: Path | None = None,
         tasks_path: Path | None = None,
+        total_seconds: int = 0,
     ):
         self.llm = llm
         self.board = board
@@ -63,10 +64,13 @@ class Orchestrator:
         self.workers = workers
         self.max_rounds = max_rounds
         self.max_new_tasks = max_new_tasks
-        self.steps_per_task = steps_per_task
+        # 0 = 不限步数：只靠时间预算兜底（墙钟是这个口子唯一的闸）。
+        self.steps_per_task = 10**6 if (steps_per_task or 0) <= 0 else steps_per_task
         self.seconds_per_task = seconds_per_task
         self.trace_dir = trace_dir
         self.live_dir = live_dir
+        self.total_seconds = total_seconds
+        self._started_at = 0.0
         # ★ 默认落在 workdir 里，不落当前目录 —— 否则不同任务会串到同一个 tasks.jsonl
         self.store = TaskStore(tasks_path or (self.workdir / "tasks.jsonl"))
         self._lock = threading.Lock()
@@ -169,14 +173,28 @@ class Orchestrator:
     def dispatch(self, tasks: list[Task]) -> list[Task]:
         if not tasks:
             return []
+        rem = self.remaining()
+        if rem <= 15:
+            return []
+        self.seconds_per_task = int(min(self.seconds_per_task, rem))
         with ThreadPoolExecutor(max_workers=min(self.workers, len(tasks))) as pool:
             return list(pool.map(self._run_task, tasks))
 
     # -- 主循环 -------------------------------------------------------------
+    def remaining(self) -> float:
+        if not self.total_seconds or not self._started_at:
+            return float("inf")
+        return self.total_seconds - (__import__("time").time() - self._started_at)
+
     def run(self, goal: str) -> Report:
+        import time as _t
         self.goal = goal
+        self._started_at = _t.time()
         report = Report()
         for i in range(1, self.max_rounds + 1):
+            if self.remaining() <= 20:
+                report.reason = "总时长预算用尽"
+                break
             plan = self.plan()
             round_ = Round(index=i, plan_reason=plan.reason, done=plan.done)
             report.rounds.append(round_)

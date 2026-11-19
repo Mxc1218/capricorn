@@ -136,6 +136,39 @@ def _write_file(path: str, content: str) -> str:
     return f"已写入 {p}（{len(content)} 字符）"
 
 
+def _to_wsl_path(p: Path) -> str:
+    """Windows 路径 → WSL 里的 /mnt/<盘>/... 路径。"""
+    s = str(Path(p).resolve())
+    if len(s) >= 2 and s[1] == ":":
+        drive = s[0].lower()
+        rest = s[2:].replace("\\", "/")
+        return "/mnt/%s%s" % (drive, rest)
+    return s.replace("\\", "/")
+
+
+def _run_shell_wsl(workdir: Path, command: str, timeout: int = 60) -> str:
+    """把命令放进 WSL(Ubuntu) 里跑 —— 这是不用 Docker 的"容器"。
+
+    ★ 为什么非这样不可：在 Windows cmd 里拼复杂命令（curl payload、for /f 循环、
+      百分号展开），实测 42% 的调用返回非零，而且大多不是能力问题，是转义问题。
+      命令写成脚本文件再交给 bash 跑，引号一个都不用转义。
+
+    命令先落到工作目录里的 .agent_cmd.sh，再 bash 执行 —— 不做任何字符串拼接。
+    """
+    script = Path(workdir) / ".agent_cmd.sh"
+    try:
+        # ★ 必须写字节：Windows 上 write_text 会把 \n 变成 \r\n，
+        #   bash 读到的是 "cd /mnt/e/xxx\r"，直接报 No such file or directory。
+        body = "cd %s\n%s\n" % (_to_wsl_path(workdir), command)
+        script.write_bytes(body.encode("utf-8"))
+    except Exception as exc:
+        return "[写入脚本失败] %s" % exc
+    return _run_shell(
+        'wsl -d Ubuntu -e bash "%s"' % _to_wsl_path(script),
+        timeout=timeout,
+    )
+
+
 def _inside(workdir: Path, path: str) -> Path:
     """把文件工具的路径钉在任务工作目录里，并且不许越界。
 
@@ -226,6 +259,8 @@ def default_registry(workdir: Path) -> Registry:
         # 扫全端口这类命令 60 秒不够；用环境变量按需放宽（默认仍是 60）
         import os as _os
         limit = int(_os.environ.get("AGENTLAB_SHELL_TIMEOUT", "60"))
+        if _os.environ.get("AGENTLAB_SHELL", "cmd").lower() == "wsl":
+            return _run_shell_wsl(workdir, command, timeout=limit)
         return _run_shell(f'cd "{workdir}" && {command}', timeout=limit)
 
     def read_inside(path: str) -> str:

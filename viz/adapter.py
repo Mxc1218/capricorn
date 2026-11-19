@@ -122,6 +122,11 @@ def build_project(source: dict) -> dict:
             "created_at": _iso(t.get("created")),
             "concluded_at": _iso(ended) if ended else None,
             "last_heartbeat_at": _iso(beat) if beat else None,
+            # 他的 execution-clock.js 读这四个；缺一个计时器就显示 0.0 秒
+            "execution_started_at": _iso(started) if started else None,
+            "execution_ended_at": _iso(ended) if ended else None,
+            "validation_total_s": round(max(0.0, ((ended or now) - started)), 1) if started else 0,
+            "validation_active_since": _iso(started) if (started and not ended) else None,
             "to_fact_id": (t.get("produced") or [None])[0],
             "merged_into": t.get("merged_into") or None,
             "worker": t.get("worker") or tid,
@@ -145,7 +150,8 @@ def build_project(source: dict) -> dict:
             "title": source.get("title") or pid,
             "platform": source.get("platform") or "local",
             "status": source.get("status") or "active",
-            "created_at": _iso(source.get("created_at")) or _iso(now),
+            # 项目创建时间 = 最早那条任务的派发时刻；缺了就用现在（会显示 0.0 秒，那是真话）
+            "created_at": _iso(source.get("created_at")) or _iso(min([t.get("created") or now for t in tasks.values()] or [now])),
         },
         "facts": facts,
         "intents": intents,
@@ -163,10 +169,13 @@ def build_project(source: dict) -> dict:
             "dangling_references": 0,
             "accepted_receipts": sum(1 for f in facts if f["evidence_status"] == "accepted" and f.get("kind") == "flag"),
             "last_activity_ts": max([f.get("ts") or 0 for f in facts] + [0]),
-            "project_span_s": (max([i.get("created_at") or "" for i in intents] + [""]) and
-                               (time.time() - (min([t.get("created") or 0 for t in tasks.values()] or [time.time()])))) or 0,
+            "project_span_s": round(max([(t.get("ended_at") or now) for t in tasks.values()] + [now]) -
+                               min([(t.get("created") or now) for t in tasks.values()] + [now]), 1),
         },
         "dangling_references": [],
+        # 他那套计时器的基准是【服务端时间】（core.js: setClock(data.server_now_ts)），
+        # 缺了它前端只能退回本机时钟；跨机器调试时计时会漂。
+        "server_now_ts": time.time(),
     }
 
 
@@ -187,15 +196,11 @@ def list_projects(sources: list[dict]) -> list[dict]:
             "title": s.get("title") or s["project_id"],
             "platform": s.get("platform") or "local",
             "status": s.get("status") or "active",
-            "created_at": _iso(s.get("created_at")) or _iso(time.time()),
+            "created_at": _iso(s.get("created_at")) or _iso(min([t.get("created") or time.time() for t in tasks.values()] or [time.time()])),
             "fact_count": len(facts),
             "intent_count": len(tasks),
         })
-    # 他那套按 created_at 倒序排，且默认选第一条。
-    # 为了让默认落在"内容最多"的项目上，这里把内容多的时间戳排前面 —— 纯展示口径，
-    # 不是真实创建时间（真实时间在项目详情里另有字段）。
-    base = time.time()
-    out.sort(key=lambda x: (x["fact_count"] + x["intent_count"]), reverse=True)
-    for i, item in enumerate(out):
-        item["created_at"] = _iso(base - i)
+    # 排序用真实创建时间（他那套按 created_at 倒序，最新的排第一）。
+    # 不能伪造：『项目总用时』就是 now-created，伪造会让计时器永远显示 0.0 秒。
+    out.sort(key=lambda x: x["created_at"] or "", reverse=True)
     return out
