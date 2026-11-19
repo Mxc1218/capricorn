@@ -1,0 +1,40 @@
+# Nmap 7.97 scan initiated Fri Nov 20 01:37:31 2026 as: E:\\hack\\¹¤¾ß\\nmap\\nmap.exe -Pn -sV -sC --script http-title,http-headers,ssl-cert -p 22,80,443 -T4 --version-light -oN nmap_svc.txt 10.129.245.100
+Nmap scan report for connected.htb (10.129.245.100)
+Host is up (0.086s latency).
+
+PORT    STATE SERVICE    VERSION
+22/tcp  open  ssh        OpenSSH 7.4 (protocol 2.0)
+80/tcp  open  http       Apache httpd 2.4.6 ((CentOS) OpenSSL/1.0.2k-fips PHP/7.4.16)
+| http-title: 404 Not Found
+|_Requested resource was config.php
+| http-headers: 
+|   Date: Thu, 19 Nov 2026 17:36:29 GMT
+|   Server: Apache/2.4.6 (CentOS) OpenSSL/1.0.2k-fips PHP/7.4.16
+|   Content-Length: 208
+|   Connection: close
+|   Content-Type: text/html; charset=iso-8859-1
+|   
+|_  (Request type: GET)
+443/tcp open  ssl/https?
+|_http-title: 400 Bad Request
+| ssl-cert: Subject: commonName=pbxconnect/organizationName=SomeOrganization/stateOrProvinceName=SomeState/countryName=--
+| Issuer: commonName=pbxconnect/organizationName=SomeOrganization/stateOrProvinceName=SomeState/countryName=--
+| Public Key type: rsa
+| Public Key bits: 2048
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2025-11-30T14:07:27
+| Not valid after:  2026-11-30T14:07:27
+| MD5:     2530 86e8 e962 6d48 36f8 e524 bf79 cc5a
+| SHA-1:   6997 e786 d78e 2d0a dcb4 f449 7f65 ba12 52ef 0466
+|_SHA-256: 46b9 6671 74f5 9939 af02 a812 993c a389 bf84 c67a de5e 94b1 6c01 43d3 fac9 b666
+| http-headers: 
+|   Date: Thu, 19 Nov 2026 17:36:29 GMT
+|   Server: Apache/2.4.6 (CentOS) OpenSSL/1.0.2k-fips PHP/7.4.16
+|   Content-Length: 362
+|   Connection: close
+|   Content-Type: text/html; charset=iso-8859-1
+|   
+|_  (Request type: GET)
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+# Nmap done at Fri Nov 20 01:38:00 2026 -- 1 IP address (1 host up) scanned in 28.91 seconds

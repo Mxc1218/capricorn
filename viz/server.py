@@ -77,6 +77,18 @@ def list_runs():
                 "error": data.get("error") or "",
                 "work": str((d / name / "work").as_posix()),
             })
+        # 也扫子目录：编排跑出来的结果没有 <task>.json，但 work/tasks.jsonl 在
+        for sub in sorted(d.iterdir()):
+            if not sub.is_dir(): continue
+            if any(t["task"] == sub.name for t in tasks): continue
+            work = sub / "work"
+            if not (work / "tasks.jsonl").exists(): continue
+            tasks.append({
+                "task": sub.name, "solved": False, "elapsed_s": None, "steps": None,
+                "tokens": 0, "error": "", "work": str(work.as_posix()),
+                "has_trace": (work / "traces").exists() and any((work / "traces").glob("*.jsonl")),
+                "has_graph": (BOARDS / (sub.name + ".jsonl")).exists(),
+            })
         runs.append({"run": d.name, "tasks": tasks})
     return runs
 
