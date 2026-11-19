@@ -87,6 +87,43 @@ def load_live():
     return out
 
 
+def load_graph(work: str):
+    """把事实与任务摊成节点 + 边 —— 前端画树就靠这个。
+
+    边只有两种，和原来那套一一对应：
+        trigger  fact  → task   （依据这条事实派了这个任务）
+        produce  task  → fact   （这条任务产出了这条事实）
+    """
+    d = Path(work)
+    nodes, edges = [], []
+    # 任务文件可能在工作目录里（编排写的），也可能在上一层（评测台写的），两处都看
+    task_file = d / "tasks.jsonl"
+    if not task_file.exists():
+        task_file = d.parent / "tasks.jsonl"
+    if task_file.exists():
+        folded = {}
+        for rec in read_jsonl(task_file):
+            folded[rec.get("id")] = rec
+        for tid, t in folded.items():
+            nodes.append({"id": tid, "type": "task", "title": t.get("title", ""),
+                          "status": t.get("status", ""), "result": (t.get("result") or "")[:200]})
+            for fid in t.get("from_facts") or []:
+                edges.append({"from": fid, "to": tid, "kind": "trigger"})
+            for fid in t.get("produced") or []:
+                edges.append({"from": tid, "to": fid, "kind": "produce"})
+    # 黑板事实（按题目存）
+    task_name = d.parent.name
+    board_file = BOARDS / (task_name + ".jsonl")
+    if board_file.exists():
+        for f in read_jsonl(board_file):
+            nodes.append({"id": f.get("id"), "type": "fact", "kind": f.get("kind"),
+                          "content": (f.get("content") or "")[:200]})
+            for ref in f.get("refs") or []:
+                # 事实之间是「支撑」关系，和任务那一侧的 trigger/produce 分开
+                edges.append({"from": ref, "to": f.get("id"), "kind": "support"})
+    return {"nodes": nodes, "edges": edges}
+
+
 def load_lanes(work: str):
     """一个 trace 文件 = 一个执行者 = 一条泳道。
 
@@ -136,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/board":
             task = (qs.get("task") or [""])[0]
             return self._json(read_jsonl(BOARDS / (task + ".jsonl")))
+        if u.path == "/api/graph":
+            return self._json(load_graph((qs.get("work") or [""])[0]))
         if u.path == "/api/trace":
             return self._json(load_lanes((qs.get("work") or [""])[0]))
         self.send_response(404)

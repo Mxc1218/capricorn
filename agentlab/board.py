@@ -35,6 +35,11 @@ class Fact:
     content: str
     source: str = ""          # 哪一轮/哪个 agent 写的
     tags: list[str] = field(default_factory=list)
+    # ★ 因果的两个端点。没有它们，前端画出来的树是假的：
+    #   refs        这条事实是【依据哪几条】得出来的（事实 → 事实的支撑关系）
+    #   produced_by 这条事实是【哪条任务】产出的（任务 → 事实的产出关系）
+    refs: list[str] = field(default_factory=list)
+    produced_by: str = ""
 
     @property
     def summary(self) -> str:
@@ -52,7 +57,8 @@ class Board:
         self._lock = _threading.Lock()
 
     # -- 写 -----------------------------------------------------------------
-    def add(self, kind: str, content: str, source: str = "", tags: list[str] | None = None) -> Fact:
+    def add(self, kind: str, content: str, source: str = "", tags: list[str] | None = None,
+            refs: list[str] | None = None, produced_by: str = "") -> Fact:
         if kind not in KINDS:
             raise ValueError("未知类型 %r（可用: %s）" % (kind, ", ".join(KINDS)))
         with self._lock:
@@ -63,6 +69,8 @@ class Board:
                 content=(content or "").strip(),
                 source=source,
                 tags=tags or [],
+                refs=[r for r in (refs or []) if r],
+                produced_by=produced_by,
             )
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
@@ -116,5 +124,10 @@ class Board:
         if len(facts) > len(shown):
             lines.append("…（更早的 %d 条已省略，用 recall 查）" % (len(facts) - len(shown)))
         for f in shown:
-            lines.append("%s [%s] %s" % (f.id, f.kind, f.summary))
+            extra = ""
+            if f.refs:
+                extra += " ←" + ",".join(f.refs)
+            if f.produced_by:
+                extra += " ⊂" + f.produced_by
+            lines.append("%s [%s] %s%s" % (f.id, f.kind, f.summary, extra))
         return "\n".join(lines)
