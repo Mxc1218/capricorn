@@ -1,0 +1,141 @@
+"""调试台服务端 —— 只读，标准库，一条命令起。
+
+    python -m viz.server --port 8770
+
+它读三个地方：
+    eval/results/<run>/<task>.json          每题结论
+    eval/results/<run>/<task>/work/traces/  步骤事件
+    eval/boards/<task>.jsonl                黑板
+    live/<task>.json                        执行者当前的实时状态
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+HERE = Path(__file__).resolve().parent
+PROJECT = HERE.parent
+RESULTS = PROJECT / "eval" / "results"
+BOARDS = PROJECT / "eval" / "boards"
+LIVE = PROJECT / "live"
+
+
+def read_json(path: Path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def read_jsonl(path: Path):
+    out = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
+def list_runs():
+    runs = []
+    if not RESULTS.exists():
+        return runs
+    for d in sorted(RESULTS.iterdir(), reverse=True):
+        if not d.is_dir():
+            continue
+        tasks = []
+        for f in sorted(d.glob("*.json")):
+            if f.name in ("summary.json",):
+                continue
+            data = read_json(f, {}) or {}
+            name = data.get("task", f.stem)
+            tasks.append({
+                "task": name,
+                "solved": data.get("solved"),
+                "elapsed_s": data.get("elapsed_s"),
+                "steps": data.get("steps"),
+                "tokens": (data.get("prompt_tokens") or 0) + (data.get("completion_tokens") or 0),
+                "error": data.get("error") or "",
+                "work": str((d / name / "work").as_posix()),
+            })
+        runs.append({"run": d.name, "tasks": tasks})
+    return runs
+
+
+def load_live():
+    if not LIVE.exists():
+        return []
+    out = []
+    for f in sorted(LIVE.glob("*.json")):
+        data = read_json(f)
+        if data:
+            out.append(data)
+    return out
+
+
+def load_trace(work: str):
+    d = Path(work) / "traces"
+    if not d.exists():
+        return []
+    files = sorted(d.glob("*.jsonl"))
+    return read_jsonl(files[-1]) if files else []
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, raw: bytes, ctype: str):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _json(self, obj):
+        self._send(json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        qs = parse_qs(u.query)
+        if u.path in ("/", "/index.html"):
+            return self._send((HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/api/runs":
+            return self._json(list_runs())
+        if u.path == "/api/live":
+            return self._json(load_live())
+        if u.path == "/api/board":
+            task = (qs.get("task") or [""])[0]
+            return self._json(read_jsonl(BOARDS / (task + ".jsonl")))
+        if u.path == "/api/trace":
+            return self._json(load_trace((qs.get("work") or [""])[0]))
+        self.send_response(404)
+        self.end_headers()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8770)
+    ap.add_argument("--bind", default="127.0.0.1")
+    a = ap.parse_args()
+    srv = ThreadingHTTPServer((a.bind, a.port), Handler)
+    print("调试台: http://%s:%d/" % (a.bind, a.port))
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

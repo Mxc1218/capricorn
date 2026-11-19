@@ -59,6 +59,7 @@ class Agent:
         trace_dir: Path | None = Path("runs"),
         deadline_s: float | None = None,
         board=None,
+        live=None,
     ):
         self.llm = llm
         self.registry = registry
@@ -67,6 +68,8 @@ class Agent:
         # ★ 墙钟预算。步数上限挡不住"一步跑十分钟"，评测里必须两把锁都上。
         self.deadline_s = deadline_s
         self.board = board
+        # ★ 运行中状态广播：调试台靠它看"每个 agent 现在在干嘛"。
+        self.live = live
 
     def _env_block(self) -> str:
         """把执行环境写进 system prompt —— 模型不该靠试探来发现自己在哪。
@@ -121,6 +124,13 @@ class Agent:
                 thought = (msg.get("content") or "").strip()
                 calls = msg.get("tool_calls") or []
 
+                if self.live is not None:
+                    self.live.step(i, "思考完成", tokens={
+                        "prompt": reply.usage.prompt_tokens,
+                        "completion": reply.usage.completion_tokens,
+                        "reasoning": reply.usage.reasoning_tokens,
+                    }, thought=thought[:200])
+
                 if tracer:
                     tracer.event("model", step=i, thought=thought[:800],
                                  reasoning=(reply.reasoning or "")[:3000],
@@ -152,6 +162,9 @@ class Agent:
                         observation = f"[工具报错] {type(exc).__name__}: {exc}"
                     step.observation = observation
                     steps.append(step)
+                    if self.live is not None:
+                        self.live.step(i, "工具返回", tool=name, args=json.dumps(args, ensure_ascii=False)[:300],
+                                       observation=observation[:300])
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": observation})
                     if tracer:
                         tracer.event("tool", step=i, name=name, risk=self.registry.get(name).risk,

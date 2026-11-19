@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><title>摩羯 · 调试台</title>
+<style>
+:root{--bg:#0b1220;--panel:#111a2c;--line:#22304a;--fg:#e6edf7;--fg2:#9fb0c9;
+--green:#3ddc84;--red:#ff5f56;--amber:#ffc857;--blue:#5aa9ff;--violet:#b08cff;--grey:#7c8aa0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.6 ui-monospace,Consolas,monospace}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line)}
+h1{font-size:14px;margin:0;font-weight:600}
+.tag{font-size:11px;color:var(--fg2);border:1px solid var(--line);padding:1px 6px;border-radius:4px}
+main{display:grid;grid-template-columns:250px 1fr 420px;height:calc(100vh - 46px)}
+.col{border-right:1px solid var(--line);overflow:auto;padding:10px}
+.col:last-child{border-right:none}
+.sec{font-size:11px;color:var(--fg2);letter-spacing:.08em;margin:12px 0 6px}
+.sec:first-child{margin-top:0}
+.item{padding:6px 8px;border:1px solid transparent;border-radius:5px;cursor:pointer;margin-bottom:4px}
+.item:hover{background:var(--panel)}
+.item.sel{background:var(--panel);border-color:var(--line)}
+.ok{color:var(--green)} .bad{color:var(--red)} .warn{color:var(--amber)}
+.meta{font-size:11px;color:var(--fg2)}
+.fact{padding:5px 8px;border-left:3px solid var(--line);margin-bottom:5px;background:var(--panel);border-radius:0 4px 4px 0}
+.k-host{border-color:var(--blue)} .k-vuln{border-color:var(--red)} .k-cred{border-color:var(--amber)}
+.k-loot{border-color:var(--violet)} .k-flag{border-color:var(--green)} .k-note{border-color:var(--grey)}
+.k-service{border-color:#2dd4bf}
+.fid{color:var(--fg2);font-size:11px;margin-right:6px}
+.ev{padding:6px 8px;border-bottom:1px dashed var(--line)}
+.ev .h{display:flex;gap:8px;align-items:baseline}
+.ev pre{margin:4px 0 0;white-space:pre-wrap;word-break:break-all;color:var(--fg2);font-size:11.5px;max-height:160px;overflow:auto}
+.live{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px;background:var(--panel)}
+.pulse{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.pulse.on{background:var(--green);animation:p 1.2s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+input{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--fg);
+padding:5px 8px;border-radius:5px;font:inherit;margin-bottom:8px}
+</style></head><body>
+<header>
+  <h1>摩羯 · 调试台</h1>
+  <span class="tag" id="status">连接中…</span>
+  <span class="tag">只读</span>
+  <span class="meta" id="clock"></span>
+</header>
+<main>
+  <div class="col">
+    <div class="sec">实时执行者</div><div id="live"></div>
+    <div class="sec">运行记录</div><div id="runs"></div>
+  </div>
+  <div class="col">
+    <div class="sec">黑板 <span class="meta" id="boardCount"></span></div>
+    <input id="q" placeholder="过滤黑板…">
+    <div id="board"></div>
+  </div>
+  <div class="col">
+    <div class="sec">步骤 <span class="meta" id="traceHint">选一次运行</span></div>
+    <div id="trace"></div>
+  </div>
+</main>
+<script>
+let selTask = null, selWork = null, boardCache = [];
+
+const fmt = s => s == null ? '-' : (s >= 1000 ? (s/1000).toFixed(1)+'k' : s);
+const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function getJson(url){ try{ const r = await fetch(url); return await r.json(); }catch(e){ return null; } }
+
+function renderLive(list){
+  const el = document.getElementById('live');
+  if(!list || !list.length){ el.innerHTML = '<div class="meta">(没有正在跑的)</div>'; return; }
+  el.innerHTML = list.map(d => {
+    const on = d.status === 'running';
+    const tok = d.tokens ? (fmt(d.tokens.prompt)+' + '+fmt(d.tokens.completion) + (d.tokens.reasoning? ' (想 '+fmt(d.tokens.reasoning)+')':'')) : '-';
+    return '<div class="live">'
+      + '<div><span class="pulse '+(on?'on':'')+'"></span><b>'+esc(d.worker)+'</b> '
+      + '<span class="meta">'+esc(d.status)+'</span></div>'
+      + '<div class="meta">任务：'+esc(d.task)+'</div>'
+      + '<div class="meta">第 '+(d.step||0)+' 步 · '+esc(d.phase||'')+' · '+tok+'</div>'
+      + (d.tool ? '<div class="meta">工具：'+esc(d.tool)+'</div>' : '')
+      + (d.args ? '<pre style="margin:4px 0;color:#9fb0c9;font-size:11px;max-height:70px;overflow:auto">'+esc(d.args)+'</pre>' : '')
+      + (d.observation ? '<pre style="margin:0;color:#7c8aa0;font-size:11px;max-height:70px;overflow:auto">'+esc(d.observation)+'</pre>' : '')
+      + '</div>';
+  }).join('');
+}
+
+function renderRuns(runs){
+  const el = document.getElementById('runs');
+  if(!runs || !runs.length){ el.innerHTML = '<div class="meta">(还没有运行记录)</div>'; return; }
+  el.innerHTML = runs.map(r => {
+    const items = (r.tasks||[]).map(t => {
+      const cls = t.solved ? 'ok' : 'bad';
+      const mark = t.solved ? '✓' : '✗';
+      return '<div class="item '+(selTask===t.task?'sel':'')+'" data-task="'+esc(t.task)+'" data-work="'+esc(t.work)+'">'
+        + '<div><span class="'+cls+'">'+mark+'</span> '+esc(t.task)+'</div>'
+        + '<div class="meta">'+fmt(t.elapsed_s)+'s · '+fmt(t.tokens)+' tok · '+(t.steps||0)+' 步</div>'
+        + '</div>';
+    }).join('');
+    return '<div class="meta" style="margin:6px 0 2px">'+esc(r.run)+'</div>' + items;
+  }).join('');
+  el.querySelectorAll('.item').forEach(n => n.onclick = () => {
+    selTask = n.dataset.task; selWork = n.dataset.work;
+    document.querySelectorAll('.item').forEach(x => x.classList.remove('sel'));
+    n.classList.add('sel');
+    loadBoard(); loadTrace();
+  });
+}
+
+function renderBoard(facts){
+  const q = document.getElementById('q').value.toLowerCase();
+  const el = document.getElementById('board');
+  document.getElementById('boardCount').textContent = '(' + facts.length + ' 条)';
+  const shown = facts.filter(f => !q || JSON.stringify(f).toLowerCase().includes(q));
+  el.innerHTML = shown.map(f => '<div class="fact k-'+(f.kind||'note')+'">'
+    + '<span class="fid">'+esc(f.id)+'</span><span class="meta">['+esc(f.kind)+']</span> '
+    + esc(f.content) + '</div>').join('') || '<div class="meta">(空)</div>';
+}
+
+function renderTrace(events){
+  const el = document.getElementById('trace');
+  document.getElementById('traceHint').textContent = selTask ? selTask : '选一次运行';
+  if(!events || !events.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
+  el.innerHTML = events.map(e => {
+    if(e.kind === 'model'){
+      const u = e.usage || {};
+      return '<div class="ev"><div class="h"><b>第 '+e.step+' 步</b><span class="meta">想 '+fmt(u.reasoning)+' · 入 '+fmt(u.prompt)+' · 出 '+fmt(u.completion)+' · 缓存 '+fmt(u.cached)+'</span></div>'
+        + (e.reasoning ? '<pre>'+esc(e.reasoning.slice(0,500))+'</pre>' : '')
+        + (e.thought ? '<pre>'+esc(e.thought.slice(0,300))+'</pre>' : '') + '</div>';
+    }
+    if(e.kind === 'tool'){
+      const risk = e.risk || '';
+      const color = risk==='exec'?'warn':(risk==='write'?'violet':'blue');
+      return '<div class="ev"><div class="h"><span class="meta">第 '+e.step+' 步</span><b class="'+color+'">'+esc(e.name)+'</b><span class="meta">'+esc(risk)+'</span></div>'
+        + '<pre>'+esc(JSON.stringify(e.args||{}, null, 0).slice(0,400))+'</pre>'
+        + '<pre style="color:#7c8aa0">'+esc((e.observation||'').slice(0,400))+'</pre></div>';
+    }
+    return '<div class="ev"><span class="meta">'+esc(e.kind)+'</span><pre>'+esc(JSON.stringify(e).slice(0,300))+'</pre></div>';
+  }).join('');
+}
+
+async function loadBoard(){
+  if(!selTask) return;
+  const facts = await getJson('/api/board?task='+encodeURIComponent(selTask)) || [];
+  boardCache = facts; renderBoard(facts);
+}
+async function loadTrace(){
+  if(!selWork) return;
+  const ev = await getJson('/api/trace?work='+encodeURIComponent(selWork)) || [];
+  renderTrace(ev);
+}
+
+async function tick(){
+  const live = await getJson('/api/live');
+  renderLive(live);
+  const runs = await getJson('/api/runs');
+  renderRuns(runs);
+  // 首次进入自动选一个，否则右边的黑板和步骤永远是空的
+  if(!selTask && runs && runs.length){
+    const first = (runs[0].tasks||[])[0];
+    if(first){ selTask = first.task; selWork = first.work; renderRuns(runs); }
+  }
+  if(selTask) await loadBoard();
+  if(selWork) await loadTrace();
+  document.getElementById('status').textContent = '在线 · 2s 刷新';
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+document.getElementById('q').oninput = () => renderBoard(boardCache);
+tick(); setInterval(tick, 2000);
+</script></body></html>

@@ -1,0 +1,5 @@
+{"id": "f001", "ts": 1795097555.810141, "kind": "host", "content": "127.0.0.1:8080 DVWA 靶场，admin/password 可登录", "source": "demo", "tags": []}
+{"id": "f002", "ts": 1795097555.8101704, "kind": "service", "content": "vulnerabilities/exec 页面存在命令注入，输入直接拼进 ping", "source": "demo", "tags": []}
+{"id": "f003", "ts": 1795097555.8101807, "kind": "vuln", "content": "注入点可用 & 串联命令；过滤了 cat / flag / ; 三个关键词", "source": "demo", "tags": []}
+{"id": "f004", "ts": 1795097555.8101873, "kind": "loot", "content": "回传通道：命令输出写到 hackable/found.txt，再 HTTP 取回", "source": "demo", "tags": []}
+{"id": "f005", "ts": 1795097555.8101926, "kind": "note", "content": "[failed] 找 flag：全盘 dir /s 被 60 秒工具超时掐断", "source": "demo", "tags": []}

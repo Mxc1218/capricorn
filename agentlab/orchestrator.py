@@ -53,6 +53,7 @@ class Orchestrator:
         steps_per_task: int = 8,
         seconds_per_task: int = 300,
         trace_dir: Path | None = None,
+        live_dir: Path | None = None,
     ):
         self.llm = llm
         self.board = board
@@ -63,6 +64,7 @@ class Orchestrator:
         self.steps_per_task = steps_per_task
         self.seconds_per_task = seconds_per_task
         self.trace_dir = trace_dir
+        self.live_dir = live_dir
         self.tasks: list[Task] = []
         self._lock = threading.Lock()
         if registry_factory is None:
@@ -94,6 +96,13 @@ class Orchestrator:
             "3. 做完调用 finish，把结论一句话写进 answer。\n"
             "4. 做不完也要 finish，说明卡在哪 —— 不要空转到步数用完。"
         ) % (task.title, task.detail)
+        live = None
+        if self.live_dir is not None:
+            from .live import Live
+
+            live = Live(Path(self.live_dir) / ("%s.json" % task.id), worker=task.id, task=task.title)
+            live.update(status="running")
+
         agent = Agent(
             llm=self.llm,
             registry=self.registry_factory(self.workdir),
@@ -101,6 +110,7 @@ class Orchestrator:
             trace_dir=self.trace_dir,
             deadline_s=self.seconds_per_task,
             board=self.board,
+            live=live,
         )
         try:
             res = agent.run(brief)
@@ -109,6 +119,8 @@ class Orchestrator:
         except Exception as exc:
             task.result = "%s: %s" % (type(exc).__name__, exc)
             task.status = "failed"
+        if live is not None:
+            live.update(status=task.status, result=task.result[:300])
         # 结论回写黑板：让下一轮的规划者看得到
         with self._lock:
             self.board.add("note", "[%s] %s → %s" % (task.status, task.title, task.result[:300]), source="worker")
