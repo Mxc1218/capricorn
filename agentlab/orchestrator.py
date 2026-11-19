@@ -90,7 +90,11 @@ class Orchestrator:
 
     # -- 执行 ---------------------------------------------------------------
     def _run_task(self, task: Task) -> Task:
+        import time as _time
+
         task.status = "running"
+        task.started_at = _time.time()
+        task.worker = task.id
         self.store.update(task)
 
         brief = (
@@ -132,6 +136,7 @@ class Orchestrator:
         # 因果收口：这条任务产出了哪些事实
         with self._lock:
             task.produced = [f.id for f in self.board.all() if f.id not in before]
+            task.ended_at = _time.time()
             self.store.update(task)
 
         if live is not None:

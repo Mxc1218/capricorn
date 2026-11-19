@@ -135,10 +135,15 @@ def board_registry(workdir: Path, board, task_id: str = "") -> Registry:
     """
     reg = default_registry(workdir)
 
-    def note(kind: str, content: str, refs: str = "") -> str:
-        """refs 是"这条结论依据哪几条已有事实"，逗号分隔（如 "f002,f004"）。"""
+    def note(kind: str, content: str, refs: str = "", status: str = "unverified") -> str:
+        """refs 是"依据哪几条已有事实"；status 是证据等级。
+
+        ★ 为什么要让 agent 自己标等级：它最清楚"这是猜的、这是验过的"。
+          但默认是 unverified —— 不给默认值，agent 就会把猜测当结论标成 accepted。
+        """
         ref_list = [x.strip() for x in str(refs or "").split(",") if x.strip()]
-        fact = board.add(kind, content, source="agent", refs=ref_list, produced_by=task_id)
+        fact = board.add(kind, content, source="agent", refs=ref_list, produced_by=task_id,
+                         evidence_status=status or "unverified")
         return "已记入黑板 %s [%s] %s" % (fact.id, fact.kind, fact.summary)
 
     def recall(query: str, limit: int = 8) -> str:
@@ -159,6 +164,8 @@ def board_registry(workdir: Path, board, task_id: str = "") -> Registry:
             "kind": {"type": "string", "enum": ["host", "service", "vuln", "cred", "loot", "flag", "note"]},
             "content": {"type": "string", "description": "一句话说清：发生了什么、在哪、依据是什么"},
             "refs": {"type": "string", "description": "可选：这条结论依据哪几条已有事实（逗号分隔的事实 id，如 f002,f004）"},
+            "status": {"type": "string", "enum": ["unverified", "candidate", "accepted", "rejected", "negated"],
+                       "description": "证据等级：没验证过的用 unverified；只是怀疑用 candidate；亲自验证通过的用 accepted"},
         }, "required": ["kind", "content"]},
         fn=note,
         risk="write",

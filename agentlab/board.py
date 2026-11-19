@@ -24,6 +24,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 KINDS = ("host", "service", "vuln", "cred", "loot", "flag", "note")
+# 证据分级：这条事实"可信到什么程度"。旧前端那套最值钱的就是这个，
+# 它把"候选 flag"和"通过回执"分得很开，避免把猜测当结论往上叠。
+STATUSES = ("unverified", "candidate", "accepted", "rejected", "negated")
 SUMMARY_WIDTH = 110
 
 
@@ -40,6 +43,7 @@ class Fact:
     #   produced_by 这条事实是【哪条任务】产出的（任务 → 事实的产出关系）
     refs: list[str] = field(default_factory=list)
     produced_by: str = ""
+    evidence_status: str = "unverified"   # unverified/candidate/accepted/rejected/negated
 
     @property
     def summary(self) -> str:
@@ -58,9 +62,12 @@ class Board:
 
     # -- 写 -----------------------------------------------------------------
     def add(self, kind: str, content: str, source: str = "", tags: list[str] | None = None,
-            refs: list[str] | None = None, produced_by: str = "") -> Fact:
+            refs: list[str] | None = None, produced_by: str = "",
+            evidence_status: str = "unverified") -> Fact:
         if kind not in KINDS:
             raise ValueError("未知类型 %r（可用: %s）" % (kind, ", ".join(KINDS)))
+        if evidence_status not in STATUSES:
+            raise ValueError("未知证据等级 %r（可用: %s）" % (evidence_status, ", ".join(STATUSES)))
         with self._lock:
             fact = Fact(
                 id="f%03d" % (len(self.all()) + 1),
@@ -71,6 +78,7 @@ class Board:
                 tags=tags or [],
                 refs=[r for r in (refs or []) if r],
                 produced_by=produced_by,
+                evidence_status=evidence_status,
             )
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(asdict(fact), ensure_ascii=False) + "\n")
@@ -125,6 +133,8 @@ class Board:
             lines.append("…（更早的 %d 条已省略，用 recall 查）" % (len(facts) - len(shown)))
         for f in shown:
             extra = ""
+            if f.evidence_status != "unverified":
+                extra += " (" + f.evidence_status + ")"
             if f.refs:
                 extra += " ←" + ",".join(f.refs)
             if f.produced_by:

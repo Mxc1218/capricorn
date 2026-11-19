@@ -112,11 +112,15 @@ def load_graph(work: str):
                           "status": t.get("status", ""), "result": (t.get("result") or "")[:200],
                           "detail": (t.get("detail") or "")[:300],
                           "created": t.get("created") or 0, "updated": t.get("updated") or 0,
+                          "started_at": t.get("started_at") or 0, "ended_at": t.get("ended_at") or 0,
+                          "worker": t.get("worker") or "", "merged_into": t.get("merged_into") or "",
                           "from_facts": t.get("from_facts") or [], "produced": t.get("produced") or []})
             for fid in t.get("from_facts") or []:
                 edges.append({"from": fid, "to": tid, "kind": "trigger"})
             for fid in t.get("produced") or []:
                 edges.append({"from": tid, "to": fid, "kind": "produce"})
+            if t.get("merged_into"):
+                edges.append({"from": tid, "to": t["merged_into"], "kind": "merge"})
     # 黑板事实（按题目存）
     task_name = d.parent.name
     board_file = BOARDS / (task_name + ".jsonl")
@@ -125,6 +129,7 @@ def load_graph(work: str):
             nodes.append({"id": f.get("id"), "type": "fact", "kind": f.get("kind"),
                           "content": (f.get("content") or "")[:200],
                           "refs": f.get("refs") or [], "produced_by": f.get("produced_by") or "",
+                          "evidence_status": f.get("evidence_status") or "unverified",
                           "ts": f.get("ts") or 0})
             for ref in f.get("refs") or []:
                 # 事实之间是「支撑」关系，和任务那一侧的 trigger/produce 分开

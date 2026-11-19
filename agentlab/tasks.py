@@ -21,11 +21,18 @@ class Task:
     title: str
     detail: str
     from_facts: list[str] = field(default_factory=list)   # 派这条任务的依据
-    status: str = "pending"                               # pending/running/done/failed
+    status: str = "pending"                               # pending/running/done/failed/merged
     result: str = ""
     produced: list[str] = field(default_factory=list)     # 产出的事实 id
+    # ── 计时（M1）：没有这三个时间，前端画不出「已等待 / 在跑多久」 ──
     created: float = 0.0
+    started_at: float = 0.0      # 执行者真正开始跑的时刻
+    ended_at: float = 0.0        # 结束时刻（完成/失败/被合并）
     updated: float = 0.0
+    # ── 协作（M1）：谁在跑、被谁合并 ──
+    worker: str = ""             # 执行者标识（并发时区分）
+    merged_into: str = ""        # 被合并到哪条任务（画 merge 边用）
+    merged_from: list[str] = field(default_factory=list)
 
 
 class TaskStore:
@@ -79,6 +86,22 @@ class TaskStore:
             if t.id == tid:
                 return t
         return None
+
+    def elapsed(self, t: Task, now: float | None = None) -> dict:
+        """返回三种时长，前端直接拿去显示，不做二次计算。
+
+        wait  = 从派发到开始等待的时间（说明调度有没有卡）
+        run   = 真正在跑的时间
+        total = 从派发到现在/结束
+        """
+        now = now or time.time()
+        end = t.ended_at or now
+        return {
+            "wait": max(0.0, (t.started_at or end) - t.created) if t.created else 0.0,
+            "run": max(0.0, (t.ended_at or now) - t.started_at) if t.started_at else 0.0,
+            "total": max(0.0, end - t.created) if t.created else 0.0,
+            "open": not t.ended_at,
+        }
 
     def render(self) -> str:
         tasks = self.all()
