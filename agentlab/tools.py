@@ -91,9 +91,37 @@ def _decode(raw: bytes) -> str:
 
 
 def _run_shell(command: str, timeout: int = 60) -> str:
-    proc = subprocess.run(command, shell=True, capture_output=True, timeout=timeout)
-    out = _decode(proc.stdout or b"") + ("\n[stderr]\n" + _decode(proc.stderr) if proc.stderr else "")
-    return f"[exit={proc.returncode}]\n{out.strip() or '(无输出)'}"
+    """跑一条 shell 命令，**保证**在 timeout 附近返回。
+
+    ★ 实战教训（2026-11-19，第一次打真 HTB）：subprocess.run(timeout=60) 在 Windows 上
+      杀的是 cmd.exe，但 cmd 拉起的子进程（这里是 nmap）还攥着管道，
+      communicate() 于是永远等下去 —— 超时形同虚设，整个执行者卡死。
+      ⇒ 自己 Popen + 用 taskkill /T 连子孙一起收。
+    """
+    import os as _os
+
+    proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        try:
+            if _os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               capture_output=True, timeout=10)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:
+            out, err = b"", b""
+        text = _decode(out or b"") + ("\n[stderr]\n" + _decode(err) if err else "")
+        return "[超时 %ds，已强杀]\n%s" % (timeout, text.strip()[:4000] or "(无输出)")
+
+    text = _decode(out or b"") + ("\n[stderr]\n" + _decode(err) if err else "")
+    return f"[exit={code}]\n{text.strip() or '(无输出)'}"
 
 
 def _read_file(path: str, max_bytes: int = 20000) -> str:
@@ -195,7 +223,10 @@ def default_registry(workdir: Path) -> Registry:
     workdir = Path(workdir).resolve()
 
     def shell(command: str) -> str:
-        return _run_shell(f'cd "{workdir}" && {command}')
+        # 扫全端口这类命令 60 秒不够；用环境变量按需放宽（默认仍是 60）
+        import os as _os
+        limit = int(_os.environ.get("AGENTLAB_SHELL_TIMEOUT", "60"))
+        return _run_shell(f'cd "{workdir}" && {command}', timeout=limit)
 
     def read_inside(path: str) -> str:
         return _read_file(str(_inside(workdir, path)))

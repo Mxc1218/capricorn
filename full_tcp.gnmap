@@ -1,0 +1,4 @@
+# Nmap 7.97 scan initiated Fri Nov 20 01:14:02 2026 as: E:\\hack\\¹¤¾ß\\nmap\\nmap.exe -Pn -n -sS -p- --min-rate 2000 --max-retries 2 -T4 --open -oA full_tcp 10.129.245.100
+Host: 10.129.245.100 ()	Status: Up
+Host: 10.129.245.100 ()	Ports: 22/open/tcp//ssh///, 80/open/tcp//http///, 443/open/tcp//https///	Ignored State: filtered (65532)
+# Nmap done at Fri Nov 20 01:15:09 2026 -- 1 IP address (1 host up) scanned in 66.81 seconds

@@ -49,8 +49,11 @@ def main(argv=None) -> int:
     #   十分钟烧完才失败。机器不该替人数这种事。
     if args.check_url:
         import urllib.request
+        # ★ 必须绕开系统代理：这台机器上 HTTP_PROXY 指向 Clash，
+        #   打内网/靶机时它会代答一个 502，看起来像"目标挂了"。
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with urllib.request.urlopen(args.check_url, timeout=6) as resp:
+            with opener.open(args.check_url, timeout=6) as resp:
                 print("目标可达：%s → HTTP %s" % (args.check_url, resp.status))
         except Exception as exc:
             print("目标不可达，已中止：%s（%s）" % (args.check_url, exc))
