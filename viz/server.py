@@ -60,7 +60,10 @@ def list_runs():
                 continue
             data = read_json(f, {}) or {}
             name = data.get("task", f.stem)
+            traces = d / name / "work" / "traces"
+            has_trace = traces.exists() and any(traces.glob("*.jsonl"))
             tasks.append({
+                "has_trace": bool(has_trace),
                 "task": name,
                 "solved": data.get("solved"),
                 "elapsed_s": data.get("elapsed_s"),
@@ -84,12 +87,27 @@ def load_live():
     return out
 
 
-def load_trace(work: str):
+def load_lanes(work: str):
+    """一个 trace 文件 = 一个执行者 = 一条泳道。
+
+    ★ 借鉴他原来那个前端的核心：不按「文件」列，按「人」列。
+      每行是一个 agent，横轴是步数，方块是工具调用 —— 一眼看出谁在干什么、卡在哪。
+    """
     d = Path(work) / "traces"
     if not d.exists():
         return []
-    files = sorted(d.glob("*.jsonl"))
-    return read_jsonl(files[-1]) if files else []
+    lanes = []
+    for f in sorted(d.glob("*.jsonl")):
+        ev = read_jsonl(f)
+        if not ev:
+            continue
+        start = next((e for e in ev if e.get("kind") == "run_start"), {})
+        lanes.append({
+            "name": f.stem.replace("run-", ""),
+            "task": (start.get("task") or "")[:80],
+            "events": ev,
+        })
+    return lanes
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -119,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
             task = (qs.get("task") or [""])[0]
             return self._json(read_jsonl(BOARDS / (task + ".jsonl")))
         if u.path == "/api/trace":
-            return self._json(load_trace((qs.get("work") or [""])[0]))
+            return self._json(load_lanes((qs.get("work") or [""])[0]))
         self.send_response(404)
         self.end_headers()
 

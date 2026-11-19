@@ -113,26 +113,52 @@ function renderBoard(facts){
     + esc(f.content) + '</div>').join('') || '<div class="meta">(空)</div>';
 }
 
-function renderTrace(events){
+function renderTrace(lanes){
   const el = document.getElementById('trace');
   document.getElementById('traceHint').textContent = selTask ? selTask : '选一次运行';
-  if(!events || !events.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
-  el.innerHTML = events.map(e => {
-    if(e.kind === 'model'){
-      const u = e.usage || {};
-      return '<div class="ev"><div class="h"><b>第 '+e.step+' 步</b><span class="meta">想 '+fmt(u.reasoning)+' · 入 '+fmt(u.prompt)+' · 出 '+fmt(u.completion)+' · 缓存 '+fmt(u.cached)+'</span></div>'
-        + (e.reasoning ? '<pre>'+esc(e.reasoning.slice(0,500))+'</pre>' : '')
-        + (e.thought ? '<pre>'+esc(e.thought.slice(0,300))+'</pre>' : '') + '</div>';
-    }
-    if(e.kind === 'tool'){
-      const risk = e.risk || '';
-      const color = risk==='exec'?'warn':(risk==='write'?'violet':'blue');
-      return '<div class="ev"><div class="h"><span class="meta">第 '+e.step+' 步</span><b class="'+color+'">'+esc(e.name)+'</b><span class="meta">'+esc(risk)+'</span></div>'
-        + '<pre>'+esc(JSON.stringify(e.args||{}, null, 0).slice(0,400))+'</pre>'
-        + '<pre style="color:#7c8aa0">'+esc((e.observation||'').slice(0,400))+'</pre></div>';
-    }
-    return '<div class="ev"><span class="meta">'+esc(e.kind)+'</span><pre>'+esc(JSON.stringify(e).slice(0,300))+'</pre></div>';
+  if(!lanes || !lanes.length){ el.innerHTML = '<div class="meta">(没有事件)</div>'; return; }
+
+  // ── 泳道：一行一个执行者，横轴步数，方块是工具调用 ──────────────
+  const rowH = 34, padL = 8, blockW = 26, maxSteps = Math.max(1, ...lanes.map(l => Math.max(...l.events.filter(e=>e.kind==='tool').map(e=>e.step||1), 1)));
+  const W = padL + maxSteps * blockW + 8;
+  let svg = '<svg width="100%" height="'+(lanes.length*rowH+8)+'" viewBox="0 0 '+W+' '+(lanes.length*rowH+8)+'" style="margin-bottom:10px">';
+  lanes.forEach((lane, i) => {
+    const y = i*rowH + 4;
+    svg += '<text x="2" y="'+(y+9)+'" fill="#9fb0c9" font-size="9">'+(i+1)+'</text>';
+    lane.events.filter(e=>e.kind==='tool').forEach(e => {
+      const x = padL + ((e.step||1)-1)*blockW;
+      const fill = e.risk==='exec' ? '#ffc857' : (e.risk==='write' ? '#b08cff' : '#5aa9ff');
+      svg += '<rect x="'+x+'" y="'+(y+1)+'" width="'+(blockW-3)+'" height="18" rx="3" fill="'+fill+'" opacity="0.82">'
+           + '<title>第'+e.step+'步 '+esc(e.name)+'\n'+esc((e.args&&JSON.stringify(e.args)||'').slice(0,120))+'</title></rect>';
+    });
+  });
+  svg += '</svg>';
+
+  // ── 逐步明细（点开看）────────────────────────────────────────
+  const body = lanes.map((lane, i) => {
+    const tools = lane.events.filter(e=>e.kind==='tool').length;
+    const models = lane.events.filter(e=>e.kind==='model');
+    const tok = models.reduce((a,m)=>a+((m.usage&&m.usage.completion)||0),0);
+    return '<details style="margin-bottom:6px"><summary class="meta">泳道 '+(i+1)+' · '+esc(lane.name)
+      +' · '+tools+' 次工具 · 出 '+fmt(tok)+' tok</summary>'
+      + lane.events.map(e => {
+          if(e.kind === 'model'){
+            const u2 = e.usage || {};
+            return '<div class="ev"><div class="h"><b>第 '+e.step+' 步</b><span class="meta">想 '+fmt(u2.reasoning)+' · 入 '+fmt(u2.prompt)+' · 出 '+fmt(u2.completion)+'</span></div>'
+              + (e.reasoning ? '<pre>'+esc(e.reasoning.slice(0,400))+'</pre>' : '') + '</div>';
+          }
+          if(e.kind === 'tool'){
+            const color = e.risk==='exec'?'warn':(e.risk==='write'?'violet':'blue');
+            return '<div class="ev"><div class="h"><span class="meta">第 '+e.step+' 步</span><b class="'+color+'">'+esc(e.name)+'</b></div>'
+              + '<pre>'+esc(JSON.stringify(e.args||{}).slice(0,300))+'</pre>'
+              + '<pre style="color:#7c8aa0">'+esc((e.observation||'').slice(0,300))+'</pre></div>';
+          }
+          return '';
+        }).join('')
+      + '</details>';
   }).join('');
+
+  el.innerHTML = svg + body;
 }
 
 async function loadBoard(){
@@ -142,8 +168,8 @@ async function loadBoard(){
 }
 async function loadTrace(){
   if(!selWork) return;
-  const ev = await getJson('/api/trace?work='+encodeURIComponent(selWork)) || [];
-  renderTrace(ev);
+  const lanes = await getJson('/api/trace?work='+encodeURIComponent(selWork)) || [];
+  renderTrace(lanes);
 }
 
 async function tick(){
@@ -153,8 +179,11 @@ async function tick(){
   renderRuns(runs);
   // 首次进入自动选一个，否则右边的黑板和步骤永远是空的
   if(!selTask && runs && runs.length){
-    const first = (runs[0].tasks||[])[0];
-    if(first){ selTask = first.task; selWork = first.work; renderRuns(runs); }
+    // 优先选有 trace 的那次，否则右边永远是空的
+    let pick = null;
+    for(const r of runs){ for(const t of (r.tasks||[])){ if(t.has_trace){ pick = t; break; } } if(pick) break; }
+    if(!pick){ for(const r of runs){ const t = (r.tasks||[])[0]; if(t){ pick = t; break; } } }
+    if(pick){ selTask = pick.task; selWork = pick.work; renderRuns(runs); loadBoard(); loadTrace(); }
   }
   if(selTask) await loadBoard();
   if(selWork) await loadTrace();
