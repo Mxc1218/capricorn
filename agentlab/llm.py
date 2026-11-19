@@ -20,6 +20,8 @@ class Usage:
     completion_tokens: int = 0
     cached_tokens: int = 0
 
+    reasoning_tokens: int = 0
+
     @property
     def total(self) -> int:
         return self.prompt_tokens + self.completion_tokens
@@ -28,6 +30,7 @@ class Usage:
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
         self.cached_tokens += other.cached_tokens
+        self.reasoning_tokens += other.reasoning_tokens
 
 
 @dataclass
@@ -35,6 +38,11 @@ class Reply:
     message: dict[str, Any]          # assistant 消息原文（可能带 tool_calls）
     usage: Usage
     raw: dict[str, Any] = field(default_factory=dict)
+    # ★ reasoning 模型把思考放在 message.reasoning_content，不在 content 里。
+    #   第一版只取了 content ⇒ trace 里 thought 全是空 ⇒ 事后根本看不出它为什么走错。
+    #   而且 completion_tokens 里【含】reasoning tokens，所以"输出 8.7 万 token"
+    #   其实绝大部分是思考，不是回答。
+    reasoning: str = ""
 
 
 class LLM:
@@ -77,12 +85,19 @@ class LLM:
                 choice = data["choices"][0]
                 msg = choice["message"]
                 u = data.get("usage") or {}
+                details = u.get("completion_tokens_details") or {}
                 usage = Usage(
                     prompt_tokens=int(u.get("prompt_tokens") or 0),
                     completion_tokens=int(u.get("completion_tokens") or 0),
                     cached_tokens=int(u.get("prompt_cache_hit_tokens") or 0),
+                    reasoning_tokens=int(details.get("reasoning_tokens") or 0),
                 )
-                return Reply(message=msg, usage=usage, raw=data)
+                return Reply(
+                    message=msg,
+                    usage=usage,
+                    raw=data,
+                    reasoning=str(msg.get("reasoning_content") or ""),
+                )
             except Exception as exc:  # 网络/限流/5xx 一律退避重试
                 last = exc
                 if attempt < self.retries:

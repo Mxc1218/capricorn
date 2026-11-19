@@ -24,6 +24,7 @@ def main(argv=None) -> int:
     ap.add_argument("--only", nargs="*", default=None, help="只跑这几道")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--budget", type=int, default=0, help="覆盖每题的秒数预算")
+    ap.add_argument("--boards", default="eval/boards", help="黑板目录（每题一个 jsonl，跨运行累积）")
     args = ap.parse_args(argv)
 
     tasks_dir, answers_dir = Path(args.tasks), Path(args.answers)
@@ -37,6 +38,7 @@ def main(argv=None) -> int:
     run_dir = Path(args.out) / time.strftime("run-%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    boards_dir = Path(args.boards)
     if args.runner == "agentlab":
         from eval.runners import AgentlabRunner
         runner = AgentlabRunner(model=args.model)
@@ -49,6 +51,11 @@ def main(argv=None) -> int:
     for task in tasks:
         workdir = prepare_workdir(task, run_dir / task.id / "work")
         budget = args.budget or task.budget_s
+
+        if runner.name == "agentlab":
+            # ★ 黑板按【题】存，跨运行累积：同一道题第二次跑，第一轮的发现还在。
+            #   这是"四轮重打"最直接的解药。
+            runner.board_path = boards_dir / f"{task.id}.jsonl"
 
         if runner.name == "stub":
             # stub 自检模式：把答案喂给它，验证判分链路
@@ -95,6 +102,7 @@ def main(argv=None) -> int:
         "total_tokens": total_tok,
         "avg_tokens": int(total_tok / len(rows)),
         "cached_tokens": cached,
+        "board": str(boards_dir / f"{tasks[0].id}.jsonl") if tasks else "",
         "cache_hit_rate": round(cached / total_tok, 3) if total_tok else 0,
         "rows": rows,
     }

@@ -125,6 +125,61 @@ def _inside(workdir: Path, path: str) -> Path:
     return target
 
 
+def board_registry(workdir: Path, board) -> Registry:
+    """带黑板的工具集 —— 在默认四个工具之外多三个。
+
+    ★ 为什么 note / recall / read_fact 要分开，而不是把黑板全塞进 prompt：
+      事实一多，全量渲染就把上下文吃光。所以 prompt 里只放【一行摘要】，
+      要看全文必须显式 read_fact —— 这是"知道有这条"与"看清这条"的分离，
+      也是省 token 的关键。
+    """
+    reg = default_registry(workdir)
+
+    def note(kind: str, content: str) -> str:
+        fact = board.add(kind, content, source="agent")
+        return "已记入黑板 %s [%s] %s" % (fact.id, fact.kind, fact.summary)
+
+    def recall(query: str, limit: int = 8) -> str:
+        hits = board.search(query, limit=limit)
+        if not hits:
+            return "(没有匹配的事实)"
+        return "\\n".join("%s [%s] %s" % (f.id, f.kind, f.summary) for f in hits)
+
+    def read_fact(fid: str) -> str:
+        f = board.get(fid)
+        return f.content if f else "(没有这条事实: %s)" % fid
+
+    reg.add(Tool(
+        name="note",
+        description="把一条【已确认】的结论记进黑板，供本轮之后和下一次运行使用。"
+                    "kind 只能是 host/service/vuln/cred/loot/flag/note。记结论，不记计划。",
+        parameters={"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["host", "service", "vuln", "cred", "loot", "flag", "note"]},
+            "content": {"type": "string", "description": "一句话说清：发生了什么、在哪、依据是什么"},
+        }, "required": ["kind", "content"]},
+        fn=note,
+        risk="write",
+    ))
+    reg.add(Tool(
+        name="recall",
+        description="在黑板上按关键词查已有事实（只返回一行摘要）。开工前先查一次，别重复别人做过的事。",
+        parameters={"type": "object", "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"},
+        }, "required": ["query"]},
+        fn=recall,
+        risk="read",
+    ))
+    reg.add(Tool(
+        name="read_fact",
+        description="读取某条黑板的完整内容（摘要不够看时用）。",
+        parameters={"type": "object", "properties": {"fid": {"type": "string"}}, "required": ["fid"]},
+        fn=read_fact,
+        risk="read",
+    ))
+    return reg
+
+
 def default_registry(workdir: Path) -> Registry:
     reg = Registry()
     workdir = Path(workdir).resolve()

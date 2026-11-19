@@ -34,9 +34,11 @@ class AgentlabRunner:
 
     name = "agentlab"
 
-    def __init__(self, model: str = "deepseek-flash", api_key: str | None = None):
+    def __init__(self, model: str = "deepseek-flash", api_key: str | None = None,
+                 board_path: Path | None = None):
         self.model = model
         self.api_key = api_key
+        self.board_path = board_path
 
     def run(self, instruction: str, workdir: Path, budget_s: int, max_steps: int) -> Outcome:
         import os
@@ -48,12 +50,22 @@ class AgentlabRunner:
         if not key:
             return Outcome(error="缺少 DEEPSEEK_API_KEY")
 
+        board = None
+        registry = default_registry(workdir)
+        if self.board_path is not None:
+            from agentlab.board import Board
+            from agentlab.tools import board_registry
+
+            board = Board(self.board_path)
+            registry = board_registry(workdir, board)
+
         agent = Agent(
             llm=LLM(api_key=key, model=self.model, timeout=min(180, max(60, budget_s // 2))),
-            registry=default_registry(workdir),
+            registry=registry,
             max_steps=max_steps,
             trace_dir=workdir / "traces",
             deadline_s=budget_s,
+            board=board,
         )
         t0 = time.time()
         try:

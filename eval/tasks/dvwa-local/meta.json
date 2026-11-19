@@ -1,0 +1,7 @@
+{
+  "budget_s": 600,
+  "max_steps": 40,
+  "kind": "web",
+  "mode": "field",
+  "target": "http://127.0.0.1:8080/DVWA-master/"
+}

@@ -44,10 +44,14 @@ def render(events) -> str:
             u2 = e.get("usage") or {}
             out.append("### 第 %s 步" % e.get("step"))
             out.append("")
+            if e.get("reasoning"):
+                out.append("**思考**：" + clip(e["reasoning"], 1200))
+                out.append("")
             if e.get("thought"):
                 out.append("**模型说**：" + clip(e["thought"], 400))
                 out.append("")
-            out.append("*token: prompt=%s completion=%s cached=%s*" % (u2.get("prompt"), u2.get("completion"), u2.get("cached")))
+            out.append("*token: prompt=%s completion=%s（其中思考 %s）cached=%s*" % (
+                u2.get("prompt"), u2.get("completion"), u2.get("reasoning"), u2.get("cached")))
             out.append("")
         elif e["kind"] == "tool":
             out.append("**调用** `%s`（risk=%s）" % (e.get("name"), e.get("risk")))

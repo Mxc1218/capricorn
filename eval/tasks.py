@@ -17,6 +17,10 @@ class Task:
     budget_s: int = 900
     max_steps: int = 30
     kind: str = "unknown"
+    # ★ 实战题（HTB 这类）：题目不是文件，是一个网络目标。
+    #   target 为空表示离线附件题；有值表示需要在 instruction 顶部把这个地址交代清楚。
+    target: str = ""
+    mode: str = "bench"      # bench（可重复，进基线统计）| field（实战，只记录不进基线）
 
     @property
     def files_dir(self) -> Path:
@@ -42,6 +46,8 @@ def load_tasks(tasks_dir: Path, answers_dir: Path, only: list[str] | None = None
             budget_s=int(meta.get("budget_s", 900)),
             max_steps=int(meta.get("max_steps", 30)),
             kind=str(meta.get("kind", "unknown")),
+            target=str(meta.get("target", "")),
+            mode=str(meta.get("mode", "bench")),
         ))
     return tasks
 
@@ -51,7 +57,13 @@ def prepare_workdir(task: Task, dest: Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    (dest / "INSTRUCTION.md").write_text(task.instruction, encoding="utf-8")
+    text = task.instruction
+    if task.target:
+        text = (
+            f"# 目标\n\n本次任务的目标地址：**{task.target}**\n"
+            f"（网络已通，直接打；不要扫目标之外的任何地址。）\n\n" + text
+        )
+    (dest / "INSTRUCTION.md").write_text(text, encoding="utf-8")
     if task.files_dir.is_dir():
         shutil.copytree(task.files_dir, dest / "files")
     return dest

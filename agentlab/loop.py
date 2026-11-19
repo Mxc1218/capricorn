@@ -58,6 +58,7 @@ class Agent:
         max_steps: int = 12,
         trace_dir: Path | None = Path("runs"),
         deadline_s: float | None = None,
+        board=None,
     ):
         self.llm = llm
         self.registry = registry
@@ -65,6 +66,7 @@ class Agent:
         self.trace_dir = trace_dir
         # ★ 墙钟预算。步数上限挡不住"一步跑十分钟"，评测里必须两把锁都上。
         self.deadline_s = deadline_s
+        self.board = board
 
     def _env_block(self) -> str:
         """把执行环境写进 system prompt —— 模型不该靠试探来发现自己在哪。
@@ -85,8 +87,14 @@ class Agent:
             tracer = Tracer(Path(trace_path))
             tracer.event("run_start", task=task, model=self.llm.model, max_steps=self.max_steps)
 
+        system = SYSTEM.format(env=self._env_block(), tools=self.registry.describe())
+        if self.board is not None:
+            # ★ 黑板只放一行摘要。全文靠 read_fact 取 —— 这是省 token 的关键，
+            #   也是"知道有这条"和"看清这条"的分离。
+            system += "\n\n# 黑板（已知事实，一行一条）\n\n" + self.board.render()
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM.format(env=self._env_block(), tools=self.registry.describe())},
+            {"role": "system", "content": system},
             {"role": "user", "content": task},
         ]
         steps: list[Step] = []
@@ -115,9 +123,11 @@ class Agent:
 
                 if tracer:
                     tracer.event("model", step=i, thought=thought[:800],
+                                 reasoning=(reply.reasoning or "")[:3000],
                                  usage={"prompt": reply.usage.prompt_tokens,
                                         "completion": reply.usage.completion_tokens,
-                                        "cached": reply.usage.cached_tokens})
+                                        "cached": reply.usage.cached_tokens,
+                                        "reasoning": reply.usage.reasoning_tokens})
 
                 if not calls:
                     answer = thought
