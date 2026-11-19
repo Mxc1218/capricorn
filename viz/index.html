@@ -55,7 +55,7 @@ body.focusmode main .col:first-child, body.focusmode main .col:last-child{displa
 <header>
   <h1>摩羯 · 调试台</h1>
   <div aria-label="视图"><button data-view="tree" class="on">推理树</button><button data-view="overview">总览</button><button data-view="current">当前方向</button><button data-view="full">全量推导图</button><button data-view="lanes">泳道</button><button data-view="board">黑板</button><button id="btnFocus" title="画布铺满窗口（Esc 退出）">画布专注</button></div>
-  <span class="tag" id="status">连接中…</span>
+  <span class="tag" id="status">连接中…</span><span class="tag" id="counters"></span><span class="tag" id="timers"></span>
   <span class="meta" id="stats"></span>
   <span class="meta" id="clock" style="margin-left:auto"></span>
 </header>
@@ -65,7 +65,7 @@ body.focusmode main .col:first-child, body.focusmode main .col:last-child{displa
     <div class="sec">运行记录</div><div id="runs"></div>
   </div>
   <div class="col" style="position:relative;padding:0;overflow:hidden">
-    <div class="filterbar" id="filterbar"><label>状态 <select id="f-status"><option value="all">全部</option><option value="active">在跑/待认领/失联</option><option value="done">已收敛</option><option value="failed">已失败</option><option value="merged">已合并</option></select></label><label><input type="checkbox" id="f-notes"> 隐藏工具说明</label><label>缩放 <select id="f-zoom"><option value="auto">自动</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option></select></label></div><div class="pane on" id="pane-tree" style="width:100%;height:100%"><svg id="canvas"></svg></div><div class="pane" id="pane-overview" style="padding:10px"></div>
+    <div class="filterbar" id="filterbar"><label>状态 <select id="f-status"><option value="all">全部</option><option value="active">在跑/待认领/失联</option><option value="done">已收敛</option><option value="failed">已失败</option><option value="merged">已合并</option></select></label><label><input type="checkbox" id="f-notes"> 隐藏工具说明</label><label>缩放 <select id="f-zoom"><option value="auto">横向精读</option><option value="fit">整图总览</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option></select></label></div><div class="pane on" id="pane-tree" style="width:100%;height:100%"><svg id="canvas"></svg></div><div class="pane" id="pane-overview" style="padding:10px"></div>
     <div class="pane" id="pane-lanes" style="padding:9px"></div>
     <div class="pane" id="pane-board" style="padding:9px"><input id="q" placeholder="过滤黑板…"><div id="board"></div></div>
     <div class="legend">
@@ -270,7 +270,6 @@ function drawTree(force){
   const colW = NW + GAP_X;
   const needW = 26 + (maxDepth + 1) * colW;
   const W2 = Math.max(W, needW);
-  svg.setAttribute("viewBox", "0 0 " + W2 + " " + H);
 
   // 泳道内按「层」堆叠：同一层放不下就往下一行，避免节点互相压住
   const pos = {};
@@ -288,6 +287,8 @@ function drawTree(force){
     });
     yCursor = laneBottom + 18;
   });
+
+  const H2 = Math.max(H, yCursor + 24);
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
   defs.innerHTML = '<marker id="arw" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#3a4d70"/></marker>';
@@ -353,7 +354,50 @@ function drawTree(force){
     grp.onclick = () => { state.sel = n.id; renderDetail(n); drawTree(true); };
     svg.appendChild(grp);
   });
+  // ── 缩放：auto = 横向精读（撑满宽度、允许纵向滚动）; fit = 整图总览 ──
+  const zoom = state.filter.zoom || 'auto';
+  if(zoom === 'auto' || zoom === '1'){
+    svg.setAttribute('viewBox', '0 0 ' + W2 + ' ' + H2);
+    svg.setAttribute('width', '100%');
+    svg.style.height = Math.max(220, H2 * (W / W2)) + 'px';
+  } else if(zoom === 'fit'){
+    const s = Math.min(W / W2, H / H2);
+    svg.setAttribute('viewBox', '0 0 ' + (W / s) + ' ' + (H / s));
+    svg.setAttribute('width', '100%');
+    svg.style.height = '100%';
+  } else {
+    const s = parseFloat(zoom) || 1;
+    svg.setAttribute('viewBox', '0 0 ' + W2 + ' ' + H2);
+    svg.setAttribute('width', Math.round(W2 * s) + 'px');
+    svg.style.height = Math.round(H2 * s) + 'px';
+  }
+
   updateTimers();
+}
+
+function updateCounters(){
+  const nodes = (state.graph.nodes || []);
+  const tasks = nodes.filter(n => n.type === 'task');
+  const st = (t) => (t.view && t.view.state) || t.status;
+  const running = tasks.filter(t => st(t) === 'running').length;
+  const waiting = tasks.filter(t => st(t) === 'pending').length;
+  const stalled = tasks.filter(t => st(t) === 'stalled').length;
+  const facts = nodes.filter(n => n.type === 'fact').length;
+  const el = document.getElementById('counters');
+  if(el) el.innerHTML = '<span style="color:#ffc857">验证中 ' + running + '</span> · '
+    + '<span style="color:#7c8aa0">待认领 ' + waiting + '</span> · '
+    + '<span style="color:#ff5f56">异常 ' + stalled + '</span> · '
+    + '事实 ' + facts;
+
+  // 计时：项目总用时 = 所有任务 (ended|now) - created 之和；本次运行 = 最早开始到现在
+  let total = 0, earliest = Infinity;
+  tasks.forEach(t => {
+    if(t.created) total += ((t.ended_at || Date.now()/1000) - t.created);
+    if(t.started_at) earliest = Math.min(earliest, t.started_at);
+  });
+  const wall = earliest === Infinity ? 0 : (Date.now()/1000 - earliest);
+  const tl = document.getElementById('timers');
+  if(tl) tl.innerHTML = '总用时 ' + fmtDur(total) + ' · 本次运行 ' + fmtDur(wall);
 }
 
 function updateTimers(){
@@ -484,6 +528,7 @@ async function tick(){
   await refresh();
   const g = state.graph;
   document.getElementById('stats').textContent = g.nodes.length ? (g.nodes.length+' 节点 / '+g.edges.length+' 边') : '';
+  updateCounters();
   document.getElementById('status').textContent = '在线 · 2s';
   document.getElementById('clock').textContent = new Date().toLocaleTimeString();
 }
