@@ -41,10 +41,20 @@ border-radius:6px;padding:6px 9px;font-size:11px;color:var(--fg2)}
 .chip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}
 .detail{border:1px solid var(--line);border-radius:6px;padding:8px;background:var(--panel);margin-bottom:8px}
 .detail h3{margin:0 0 4px;font-size:12px}
+
+.filterbar{display:flex;gap:14px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11px;color:var(--fg2)}
+.filterbar select{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit}
+.filterbar input[type=checkbox]{accent-color:#5aa9ff}
+body.focusmode main{grid-template-columns:0 1fr 0}
+body.focusmode main .col:first-child, body.focusmode main .col:last-child{display:none}
+.card{border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:10px;margin-bottom:10px}
+.card h3{margin:0 0 6px;font-size:12px;color:var(--fg2);font-weight:600}
+.big{font-size:20px}
+.pill{display:inline-block;background:#16223a;border:1px solid var(--line);border-radius:10px;padding:1px 8px;margin:2px 4px 2px 0}
 </style></head><body>
 <header>
   <h1>摩羯 · 调试台</h1>
-  <div aria-label="视图"><button data-view="tree" class="on">推理树</button><button data-view="lanes">泳道</button><button data-view="board">黑板</button></div>
+  <div aria-label="视图"><button data-view="tree" class="on">推理树</button><button data-view="overview">总览</button><button data-view="current">当前方向</button><button data-view="full">全量推导图</button><button data-view="lanes">泳道</button><button data-view="board">黑板</button><button id="btnFocus" title="画布铺满窗口（Esc 退出）">画布专注</button></div>
   <span class="tag" id="status">连接中…</span>
   <span class="meta" id="stats"></span>
   <span class="meta" id="clock" style="margin-left:auto"></span>
@@ -55,7 +65,7 @@ border-radius:6px;padding:6px 9px;font-size:11px;color:var(--fg2)}
     <div class="sec">运行记录</div><div id="runs"></div>
   </div>
   <div class="col" style="position:relative;padding:0;overflow:hidden">
-    <div class="pane on" id="pane-tree" style="width:100%;height:100%"><svg id="canvas"></svg></div>
+    <div class="filterbar" id="filterbar"><label>状态 <select id="f-status"><option value="all">全部</option><option value="active">在跑/待认领/失联</option><option value="done">已收敛</option><option value="failed">已失败</option><option value="merged">已合并</option></select></label><label><input type="checkbox" id="f-notes"> 隐藏工具说明</label><label>缩放 <select id="f-zoom"><option value="auto">自动</option><option value="0.8">80%</option><option value="1">100%</option><option value="1.25">125%</option></select></label></div><div class="pane on" id="pane-tree" style="width:100%;height:100%"><svg id="canvas"></svg></div><div class="pane" id="pane-overview" style="padding:10px"></div>
     <div class="pane" id="pane-lanes" style="padding:9px"></div>
     <div class="pane" id="pane-board" style="padding:9px"><input id="q" placeholder="过滤黑板…"><div id="board"></div></div>
     <div class="legend">
@@ -81,7 +91,7 @@ window.onerror = function(m, src, line){
     document.getElementById('status').textContent = '出错';
   }catch(e){}
 };
-let state = { runs: [], live: [], graph: {nodes:[],edges:[]}, board: [], selTask:null, selWork:null, view:'tree', sel:null };
+let state = { runs: [], live: [], graph: {nodes:[],edges:[]}, board: [], selTask:null, selWork:null, view:'tree', sel:null, lastLanes: [], filter:{status:'all', hideNotes:false, zoom:'auto'} };
 
 const fmt = s => s == null ? '-' : (s >= 1000 ? (s/1000).toFixed(1)+'k' : s);
 const esc = s => String(s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -90,11 +100,22 @@ async function getJson(url){ try{ const r = await fetch(url); return await r.jso
 
 // ── 视图切换 ────────────────────────────────────────────────
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
-  state.view = b.dataset.view;
+  state.view = b.dataset.view; location.hash = state.view;
   document.querySelectorAll('[data-view]').forEach(x => x.classList.toggle('on', x === b));
-  ['tree','lanes','board'].forEach(v => document.getElementById('pane-'+v).classList.toggle('on', v === state.view));
-  if(state.view === 'tree') drawTree();
+  // current / full 复用同一个画布面板（pane-tree），否则切过去是空白
+  const paneOf = {tree:'tree', current:'tree', full:'tree', overview:'overview', lanes:'lanes', board:'board'};
+  ['tree','overview','lanes','board'].forEach(v => {
+    const el = document.getElementById('pane-'+v); if(el) el.classList.toggle('on', v === paneOf[state.view]);
+  });
+  document.getElementById('filterbar').style.display = (state.view==='tree'||state.view==='current'||state.view==='full') ? 'flex' : 'none';
+  renderView(true);
 });
+function renderView(force){
+  if(state.view === 'overview') return renderOverview();
+  if(state.view === 'lanes') return drawLanes(state.lastLanes||[]);
+  if(state.view === 'board') return drawBoard();
+  return drawTree(force);
+}
 
 // ── 左：实时 + 运行 ─────────────────────────────────────────
 function renderLive(list){
@@ -124,6 +145,69 @@ function renderRuns(runs){
 }
 
 // ── 中：推理树（分层布局）───────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// M4：视图齐全 —— 总览 / 当前方向 / 全量推导图 / 画布专注 + 筛选器
+// ─────────────────────────────────────────────────────────────
+function visibleNodes(){
+  const f = state.filter;
+  let nodes = state.graph.nodes || [];
+  if(f.hideNotes) nodes = nodes.filter(n => !(n.type==='fact' && n.kind==='note'));
+  if(f.status !== 'all'){
+    nodes = nodes.filter(n => {
+      if(n.type !== 'task') return true;          // 事实不按任务状态筛
+      const st = (n.view && n.view.state) || n.status;
+      if(f.status === 'active') return st==='running' || st==='pending' || st==='stalled';
+      return st === f.status;
+    });
+  }
+  const ids = new Set(nodes.map(n => n.id));
+  const edges = (state.graph.edges||[]).filter(e => ids.has(e.from) && ids.has(e.to));
+  return { nodes, edges };
+}
+
+function focusedNodes(){
+  // 当前方向：只留"活着"的任务 + 它们的上下游一圈
+  const keep = new Set();
+  const all = state.graph.nodes || [];
+  const byId = {}; all.forEach(n => byId[n.id] = n);
+  all.forEach(n => {
+    if(n.type!=='task') return;
+    const st = (n.view && n.view.state) || n.status;
+    if(!(st==='running' || st==='pending' || st==='stalled')) return;
+    keep.add(n.id);
+    (n.from_facts||[]).forEach(f => keep.add(f));
+    (n.produced||[]).forEach(f => keep.add(f));
+    state.graph.edges.forEach(e => { if(e.to===n.id) keep.add(e.from); if(e.from===n.id) keep.add(e.to); });
+  });
+  const nodes = all.filter(n => keep.has(n.id));
+  const ids = new Set(nodes.map(n=>n.id));
+  return { nodes, edges: (state.graph.edges||[]).filter(e => ids.has(e.from) && ids.has(e.to)) };
+}
+
+function renderOverview(){
+  const el = document.getElementById('pane-overview');
+  const g = state.graph, nodes = g.nodes||[], edges = g.edges||[];
+  const tasks = nodes.filter(n=>n.type==='task'), facts = nodes.filter(n=>n.type==='fact');
+  const byState = {}, byKind = {}, byEvidence = {};
+  tasks.forEach(t => { const s=(t.view&&t.view.label)||t.status||'?'; byState[s]=(byState[s]||0)+1; });
+  facts.forEach(f => { byKind[f.kind||'?']=(byKind[f.kind||'?']||0)+1;
+                       byEvidence[f.evidence_status||'unverified']=(byEvidence[f.evidence_status||'unverified']||0)+1; });
+  const rows = (obj) => Object.keys(obj).sort((a,b)=>obj[b]-obj[a]).map(k=>'<span class="pill">'+esc(k)+' '+obj[k]+'</span>').join(' ');
+  const stuck = tasks.filter(t => t.view && (t.view.state==='stalled'));
+  const running = tasks.filter(t => t.view && t.view.state==='running');
+  el.innerHTML =
+    '<div class="card"><h3>规模</h3>'
+    + '<div class="big">'+tasks.length+' <span class="meta">任务</span> · '+facts.length+' <span class="meta">事实</span> · '+edges.length+' <span class="meta">边</span></div>'
+    + '</div>'
+    + '<div class="card"><h3>任务状态</h3><div>'+(rows(byState)||'<span class="meta">(空)</span>')+'</div></div>'
+    + '<div class="card"><h3>事实类型</h3><div>'+(rows(byKind)||'<span class="meta">(空)</span>')+'</div></div>'
+    + '<div class="card"><h3>证据等级</h3><div>'+(rows(byEvidence)||'<span class="meta">(空)</span>')+'</div></div>'
+    + '<div class="card"><h3>需要盯的</h3>'
+    + (running.length ? '<div class="meta">在跑：'+running.map(t=>esc(t.id)+' '+esc(t.title)+'（'+fmtDur((t.view.run||0))+'）').join('；')+'</div>' : '<div class="meta">没有在跑的任务</div>')
+    + (stuck.length ? '<div style="color:#ff5f56">失联：'+stuck.map(t=>esc(t.id)+' '+esc(t.title)).join('；')+'</div>' : '')
+    + '</div>';
+}
+
 let nodeEls = {};          // id -> {badge, rect, meta}
 let graphKey = "";         // 内容指纹：只有内容变了才重建 SVG
 let graphStamp = 0;        // 上次收到数据的时间，计时器据此增量累加
@@ -140,7 +224,11 @@ function fmtDur(s){ s = Math.max(0, Math.round(s)); return s < 60 ? s+'s' : (s<3
 
 function drawTree(force){
   const svg = document.getElementById('canvas');
-  const g = state.graph;
+  // 按当前视图挑要画的子图：tree/current/full 三种都用同一套渲染
+  const g = state.view === 'current' ? focusedNodes()
+          : (state.view === 'tree' || state.view === 'full') ? visibleNodes()
+          : state.graph;
+  if(state.view === 'full') { g.nodes = (g.nodes||[]).slice().sort((a,b)=>((a.ts||a.created||0)-(b.ts||b.created||0))); }
   const sig = graphSignature(g);
   if(!force && sig === graphKey){ updateTimers(); return; }   // ← 增量：不动 DOM
   graphKey = sig; graphStamp = Date.now(); nodeEls = {};
@@ -151,7 +239,7 @@ function drawTree(force){
   while(svg.firstChild) svg.removeChild(svg.firstChild);
 
   if(!g.nodes.length){
-    svg.innerHTML = '<text x="20" y="40" fill="#7c8aa0" font-size="12">（没有数据：先跑一次编排，或选一个运行）</text>';
+    var dbg = 'view='+state.view+' nodes='+(g.nodes||[]).length+' edges='+(g.edges||[]).length+' all='+(state.graph.nodes||[]).length+' err='+(state.lastErr||'');svg.innerHTML = '<text x="20" y="40" fill="#7c8aa0" font-size="12">（没有数据：' + dbg + '）</text>';
     return;
   }
 
@@ -374,7 +462,7 @@ async function refresh(){
     state.board = await getJson('/api/board?task='+encodeURIComponent(state.selTask)) || [];
     state.graph = await getJson('/api/graph?work='+encodeURIComponent(state.selWork)) || {nodes:[],edges:[]};
     const lanes = await getJson('/api/trace?work='+encodeURIComponent(state.selWork)) || [];
-    renderTrace(lanes); drawLanes(lanes);
+    state.lastLanes = lanes; renderTrace(lanes); drawLanes(lanes);
   }
   if(state.view === 'tree') drawTree();
   if(state.view === 'board') drawBoard();
@@ -399,8 +487,23 @@ async function tick(){
   document.getElementById('status').textContent = '在线 · 2s';
   document.getElementById('clock').textContent = new Date().toLocaleTimeString();
 }
+// 启动时按 hash 恢复视图，例如 http://127.0.0.1:8770/#overview
+const initial = (location.hash||'').replace('#','');
+if(initial){ const btn = document.querySelector('[data-view="'+initial+'"]'); if(btn) setTimeout(()=>btn.click(), 50); }
 document.getElementById('q').oninput = drawBoard;
-window.addEventListener('resize', () => { if(state.view === 'tree') drawTree(); });
+document.getElementById('f-status').onchange = (e) => { state.filter.status = e.target.value; renderView(true); };
+document.getElementById('f-notes').onchange = (e) => { state.filter.hideNotes = e.target.checked; renderView(true); };
+document.getElementById('f-zoom').onchange = (e) => { state.filter.zoom = e.target.value; renderView(true); };
+
+window.addEventListener('resize', () => renderView(false));
+document.getElementById('btnFocus').onclick = () => {
+  document.body.classList.toggle('focusmode');
+  renderView(true);
+};
+window.addEventListener('keydown', (e) => {
+  if(e.key === 'Escape' && document.body.classList.contains('focusmode')){ document.body.classList.remove('focusmode'); renderView(true); }
+  if(e.key === 'f' || e.key === 'F'){ document.getElementById('btnFocus').click(); }
+});
 tick();
 setInterval(tick, 2000);
 setInterval(updateTimers, 1000);   // 计时器本地走字，不等服务器
