@@ -1,0 +1,87 @@
+# 优先级规则表 —— 决定"一条方向该排多急"
+#
+# 为什么单独一个文件：这张表会改很多次。写在代码里的话，每调一个数字都要
+# 改代码、跑测试、发 PR；放在这里，改一行重跑一轮就能验证。
+#
+# 改规则的三条纪律：
+#   1. 每次改动必须有 evidence（指向具体 run 目录或实测数据），没有证据的规则不许进表
+#   2. 单题样本不调规则 —— 至少累计 3 题，或出现"某类连续 5 次零产出"这种明显异常
+#   3. 改之前把旧版本留一份（rules.vN.yaml），回滚就是拷回来
+
+version: 1
+updated: 2026-11-20
+
+# 没命中任何规则时的默认行为：放行、按规划者给的优先级。
+# 审查器的价值是"压住已知的低价值动作"，不是"拦住一切未知"。
+defaults:
+  priority: 2
+  verdict: ALLOW
+  reason: 未命中任何规则，按规划者的原始优先级放行
+
+rules:
+  - id: fallback.wordlist
+    when:
+      any: [gobuster, dirb, ffuf, feroxbuster, dirsearch, gobuster dir]
+      scale_any: [big.txt, medium, large, 全量, 大字典, 超大, 万条, 20000, 2000]
+    then:
+      priority: 3
+      reason: 大字典目录枚举信息密度低、单条命令分钟级，属于兜底手段
+    evidence: |
+      2026-11-20 a-05：worker 用大字典扫目录，单条 gobuster 占槽 3 分钟以上，
+      期间队列里已经有更该做的方向在等。用户判断：这类事应该"等其他方向都找不到时再跑"。
+    examples:
+      hit:
+        - gobuster dir -u http://10.0.0.1 -w /usr/share/wordlists/dirb/big.txt
+        - 用大字典对根路径做全量目录枚举
+      miss:
+        - curl -s http://10.0.0.1/robots.txt
+        - 用 gobuster 扫 common.txt（小字典，分钟级以内）
+
+  - id: fallback.bruteforce
+    when:
+      any: [hydra, medusa, bruteforce, 爆破, 撞库, 口令枚举]
+    then:
+      priority: 3
+      reason: 爆破类动作耗时长、失败率高，且容易被封，属于兜底手段
+    evidence: |
+      跑分环境中靶场通常有速率限制；爆破的期望收益远低于直接找漏洞。
+      目前只有逻辑判断，缺少实测数据 —— 累计 3 题后再评估是否保留。
+    examples:
+      hit: [用 hydra 爆破 ssh 口令, POST 表单口令爆破]
+      miss: [用已知凭据登录]
+
+  - id: recon.fingerprint
+    when:
+      any: [curl -i, 指纹, banner, nmap -sv, 服务识别, 首页, robots.txt]
+    then:
+      priority: 2
+      reason: 侦察是必需的前置，但一次就够，不需要反复做
+    evidence: |
+      2026-11-20 e/a 系列：指纹类操作几乎每轮都在前 30 秒完成，且都产出了事实。
+    examples:
+      hit: [抓取首页并提取基础指纹, nmap -sV 10.0.0.1]
+      miss: [用 sqlmap 跑注入]
+
+  - id: exploit.injection
+    when:
+      any: [sqlmap, sql 注入, sqli, 注入, 盲注, union select]
+    then:
+      priority: 2
+      reason: 注入是通往数据的主要路径，值得优先
+    evidence: |
+      2026-11-20 e1-01/e1-03：注入类方向是拿到 flag 的直接原因（SQLi 绕过登录、cmd 参数 RCE）。
+    examples:
+      hit: [登录表单 SQL 注入探测, 用 sqlmap 跑 dump]
+      miss: [读取 robots.txt]
+
+  - id: exploit.auth_bypass
+    when:
+      any: [默认口令, 默认凭据, 弱口令, 认证绕过, 登录绕过, 越权]
+    then:
+      priority: 2
+      reason: 认证类缺陷通常一步到位，成本低收益高
+    evidence: |
+      2026-11-20 e1-01：admin 默认口令测试是并行派发的两条之一，19 秒内命中。
+    examples:
+      hit: [登录默认凭据测试, 测试越权下载]
+      miss: [目录枚举]

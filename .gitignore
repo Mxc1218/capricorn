@@ -5,3 +5,4 @@ runs/
 eval/results/
 .DS_Store
 live/
+.issues/

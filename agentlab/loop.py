@@ -152,6 +152,9 @@ class Agent:
                     except json.JSONDecodeError:
                         args = {}
                     step = Step(index=i, thought=thought, tool=name, args=args, usage=reply.usage)
+                    # ★ 记录单次操作的耗时：复盘要看"哪个动作吃掉了时间"，
+                    #   没有这个数就只能凭感觉，而感觉通常是错的。
+                    _t_tool = time.time()
                     try:
                         observation = self.registry.get(name).call(args)
                     except Finish as fin:
@@ -161,6 +164,7 @@ class Agent:
                     except Exception as exc:
                         observation = f"[工具报错] {type(exc).__name__}: {exc}"
                     step.observation = observation
+                    _tool_seconds = round(time.time() - _t_tool, 2)
                     steps.append(step)
                     if self.live is not None:
                         self.live.step(i, "工具返回", tool=name, args=json.dumps(args, ensure_ascii=False)[:300],
@@ -168,7 +172,8 @@ class Agent:
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": observation})
                     if tracer:
                         tracer.event("tool", step=i, name=name, risk=self.registry.get(name).risk,
-                                     args=args, observation=observation[:800])
+                                     args=args, observation=observation[:800],
+                                     seconds=_tool_seconds)
                 if finished:
                     break
 
