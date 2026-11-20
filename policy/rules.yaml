@@ -8,7 +8,7 @@
 #   2. 单题样本不调规则 —— 至少累计 3 题，或出现"某类连续 5 次零产出"这种明显异常
 #   3. 改之前把旧版本留一份（rules.vN.yaml），回滚就是拷回来
 
-version: 1
+version: 2
 updated: 2026-11-20
 
 # 没命中任何规则时的默认行为：放行、按规划者给的优先级。
@@ -20,22 +20,28 @@ defaults:
 
 rules:
   - id: fallback.wordlist
+    # ★ 2026-11-20 第二轮实测推翻了第一版的判据：
+    #   第一版要求"必须是 big.txt/大字典"才压，结果 common.txt 那次也没被压 ——
+    #   而它跑了 181 秒。原因不在字典大小，在【请求数】：
+    #     gobuster -w common.txt -x php,json,txt  →  4500 条 × 4 = 1.8 万请求
+    #   所以判据改成"用了扫描工具就压"，不再猜字典大小。
     when:
-      any: [gobuster, dirb, ffuf, feroxbuster, dirsearch, gobuster dir]
-      scale_any: [big.txt, medium, large, 全量, 大字典, 超大, 万条, 20000, 2000]
+      any: [gobuster, dirb, ffuf, feroxbuster, dirsearch]
     then:
       priority: 3
-      reason: 大字典目录枚举信息密度低、单条命令分钟级，属于兜底手段
+      reason: 目录/文件爆破工具单次动辄分钟级，属于兜底手段
     evidence: |
-      2026-11-20 a-05：worker 用大字典扫目录，单条 gobuster 占槽 3 分钟以上，
-      期间队列里已经有更该做的方向在等。用户判断：这类事应该"等其他方向都找不到时再跑"。
+      2026-11-20 a-05 实测（带耗时的新 trace）：
+        gobuster -w big.txt                      71 秒
+        gobuster -w common.txt -x php,json,txt  181 秒  ← 小字典也会跑三分钟
+      两次都在"还有更该做的方向在等"的时候占着槽位。
     examples:
       hit:
-        - gobuster dir -u http://10.0.0.1 -w /usr/share/wordlists/dirb/big.txt
+        - gobuster dir -u http://10.0.0.1 -w /usr/share/dirb/wordlists/common.txt -x php
         - 用大字典对根路径做全量目录枚举
       miss:
         - curl -s http://10.0.0.1/robots.txt
-        - 用 gobuster 扫 common.txt（小字典，分钟级以内）
+        - curl -s -o /dev/null -w "%{http_code}" http://10.0.0.1/admin
 
   - id: fallback.bruteforce
     when:

@@ -186,6 +186,14 @@ def main(argv=None) -> int:
                                   args.engine, on_flag=submit_now, flag_count=ch.flag_count)
                 print("[agent] 本题共抓到 %d 个 flag" % len(flags), flush=True)
             finally:
+                # ★ 每轮跑完生成一份 writeup —— 路径固定，可对比、可归档
+                try:
+                    from agentlab.writeup import generate as gen_writeup
+
+                    wp = gen_writeup(RUNS / ch.unique_code)
+                    print("[writeup] %s" % wp, flush=True)
+                except Exception as exc:
+                    print("[writeup] 生成失败：%s: %s" % (type(exc).__name__, exc), flush=True)
                 try:
                     client.close_challenge(ch.unique_code)
                     print("[task] 容器已关闭", flush=True)
