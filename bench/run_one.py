@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from tsec_benchmark import (DuplicateSubmit, InvalidState, TSecBenchmark,
@@ -48,7 +50,7 @@ def goal_text(ch, started) -> str:
     ])
 
 
-def run_agent(work: Path, goal: str, minutes: int, engine: str) -> list[str]:
+def run_agent(work: Path, goal: str, minutes: int, engine: str, on_flag=None) -> list[str]:
     work.mkdir(parents=True, exist_ok=True)
     (work / "goal.txt").write_text(goal, encoding="utf-8")
     (work / "flag.txt").write_text("", encoding="utf-8")
@@ -83,9 +85,50 @@ def run_agent(work: Path, goal: str, minutes: int, engine: str) -> list[str]:
                "--live-dir", str(work / "live"), "--trace-dir", str(work / "traces")]
 
     print("[agent] 引擎=%s，预算 %d 分钟" % (engine, minutes), flush=True)
-    subprocess.run(cmd, env=env, check=False, cwd=str(ROOT))
-    text = (work / "flag.txt").read_text(encoding="utf-8", errors="replace")
-    return [m.group(0) for m in FLAG_RE.finditer(text)]
+    # ★ 边跑边收：agent 可能写 flag.txt，也可能只记在黑板（kind=flag）。
+    #   实测 e1-01 第二次跑：flag 在 33 秒时进了黑板，脚本却等进程结束才读文件 ⇒ 白等。
+    proc = subprocess.Popen(cmd, env=env, cwd=str(ROOT))
+
+    seen: list[str] = []
+    while proc.poll() is None:
+        for f in collect_flags(work):
+            if f not in seen:
+                seen.append(f)
+                print("[flag] 抓到 %s" % f, flush=True)
+                if on_flag is not None:
+                    on_flag(f)
+        time.sleep(5)
+
+    for f in collect_flags(work):
+        if f not in seen:
+            seen.append(f)
+            print("[flag] 结束时抓到 %s" % f, flush=True)
+            if on_flag is not None:
+                on_flag(f)
+    return seen
+
+
+def collect_flags(work: Path) -> list[str]:
+    # 两个通道：产物文件、黑板上的 flag 事实
+    out: list[str] = []
+    try:
+        text = (work / "flag.txt").read_text(encoding="utf-8", errors="replace")
+        out += [m.group(0) for m in FLAG_RE.finditer(text)]
+    except Exception:
+        pass
+    try:
+        for line in (work / "board.jsonl").read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("kind") == "flag":
+                out += [m.group(0) for m in FLAG_RE.finditer(rec.get("content") or "")]
+    except Exception:
+        pass
+    return out
 
 
 def main(argv=None) -> int:
@@ -94,6 +137,7 @@ def main(argv=None) -> int:
     ap.add_argument("--code", default="")
     ap.add_argument("--minutes", type=int, default=25)
     ap.add_argument("--engine", choices=["wsl", "docker"], default="wsl")
+    ap.add_argument("--force", action="store_true", help="已通关的题也重跑（做 A/B 用）")
     args = ap.parse_args(argv)
 
     if not TOKEN:
@@ -109,7 +153,7 @@ def main(argv=None) -> int:
                     print("  %-10s flags=%d 已完成=%s" % (ch.unique_code, ch.flag_count, ch.is_completed))
                 return 0
 
-            todo = [c for c in challenges if not c.is_completed]
+            todo = challenges if args.force else [c for c in challenges if not c.is_completed]
             if args.code:
                 todo = [c for c in todo if c.unique_code == args.code]
             if not todo:
@@ -120,18 +164,27 @@ def main(argv=None) -> int:
             print("[task] %s（%d 个 flag）" % (ch.unique_code, ch.flag_count), flush=True)
             started = client.start_challenge(ch.unique_code)
             print("[task] 靶场地址：%s" % (started.container_addr,), flush=True)
+            submitted: set[str] = set()
+
+            def submit_now(flag: str) -> None:
+                # ★ 拿到就交，不等 agent 收工 —— 分数先落袋，再看它后面还干什么
+                if flag in submitted:
+                    return
+                submitted.add(flag)
+                try:
+                    res = client.submit_flag(ch.unique_code, flag)
+                    print("[submit] %s correct=%s awarded=%s progress=%s/%s"
+                          % (flag, res.correct, res.awarded, res.correct_flag_count,
+                             res.total_flag_count), flush=True)
+                except DuplicateSubmit:
+                    print("[submit] %s 已提交过（幂等）" % flag, flush=True)
+                except TSecError as exc:
+                    print("[submit] %s 失败：%s" % (flag, exc), flush=True)
+
             try:
-                flags = run_agent(RUNS / ch.unique_code, goal_text(ch, started), args.minutes, args.engine)
-                print("[agent] 从 flag.txt 抠出：%s" % (flags or "(无)"), flush=True)
-                for f in flags:
-                    try:
-                        res = client.submit_flag(ch.unique_code, f)
-                        print("[submit] %s correct=%s progress=%s/%s"
-                              % (f, res.correct, res.correct_flag_count, res.total_flag_count), flush=True)
-                    except DuplicateSubmit:
-                        print("[submit] %s 已提交过" % f, flush=True)
-                    except TSecError as exc:
-                        print("[submit] 失败：%s" % exc, flush=True)
+                flags = run_agent(RUNS / ch.unique_code, goal_text(ch, started), args.minutes,
+                                  args.engine, on_flag=submit_now)
+                print("[agent] 本题共抓到 %d 个 flag" % len(flags), flush=True)
             finally:
                 try:
                     client.close_challenge(ch.unique_code)

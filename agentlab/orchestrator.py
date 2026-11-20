@@ -99,6 +99,8 @@ class Orchestrator:
         self.reason_fail_until = 0.0
         self.reason_attempts = 0
         self.planner_done = False
+        self.done_without_evidence = 0
+        self.give_up_reason = ""
 
         if registry_factory is None:
             from .tools import board_registry
@@ -119,7 +121,32 @@ class Orchestrator:
         return [t for t in self.store.all() if t.status == "pending"]
 
     def done_file_exists(self) -> bool:
-        return bool(self.done_when) and Path(self.done_when).exists()
+        # ★ 不能只看文件是否存在：跑分脚本会先建一个空的 flag.txt 占位，
+        #   只看 exists() 会让 agent 在第 0 秒就收工（实测踩过：耗时 0s、黑板 0 条）。
+        #   必须「存在 + 非空」才算达成。
+        if not self.done_when:
+            return False
+        p = Path(self.done_when)
+        try:
+            return p.exists() and bool(p.read_text(encoding="utf-8", errors="replace").strip())
+        except Exception:
+            return False
+
+    def board_has_flag(self) -> bool:
+        """黑板上是否已经有 flag 类事实。
+
+        ★ 实测（2026-11-20，e1-01 第二次跑）：agent 把 flag 记进了黑板 f004，
+          但没写 flag.txt —— 只盯文件的话，达成判定永远不响，它会继续跑满预算。
+          "结果落在哪"不该只有一条通道。
+        """
+        for f in self.board.all():
+            if f.kind == "flag" and (f.content or "").strip():
+                return True
+        return False
+
+    def goal_achieved(self) -> bool:
+        """目标达成的两条通道：产物文件有内容，或黑板上已有 flag 事实。"""
+        return self.done_file_exists() or self.board_has_flag()
 
     # -- 规划 ---------------------------------------------------------------
     def plan(self):
@@ -138,8 +165,21 @@ class Orchestrator:
             plan = self.plan()
         except Exception:
             return False
+
         if plan.done:
-            self.planner_done = True
+            # ★★ 规划者不能单独宣布"完成"。
+            #   实测（2026-11-20 第三次跑 e1-01）：它跑了 5 分 47 秒、只有 2 条事实，
+            #   就报 done=True 收工了 —— 一题都没解出来。
+            #   所以"完成"必须有【证据】：产物文件有内容，或黑板上已有 flag 事实。
+            #   没证据的 done 当"这轮提不出新方向"处理，并计数；反复如此才放弃。
+            if self.goal_achieved():
+                self.planner_done = True
+            else:
+                self.done_without_evidence += 1
+                if self.done_without_evidence >= 2:
+                    self.give_up_reason = "规划者连续声称完成但没有证据（黑板无 flag、产物为空）"
+                    self.planner_done = True
+
         with self._lock:
             for pt in plan.tasks[: self.max_new_tasks]:
                 self.store.add(pt.title, pt.detail, pt.from_facts)
@@ -246,14 +286,17 @@ class Orchestrator:
         running: dict[str, object] = {}
         with ThreadPoolExecutor(max_workers=max(1, self.workers + 1)) as pool:
             while True:
-                # 1) 收工判定
-                if self.done_file_exists():
+                # 1) 收工判定 —— 两条通道都算：产物文件有内容，或黑板上已有 flag 事实
+                if self.goal_achieved():
                     report.finished = True
-                    report.reason = "目标产物已生成：%s" % self.done_when
+                    report.reason = ("目标产物已生成：%s" % self.done_when
+                                     if self.done_file_exists() else "黑板上已记录 flag 事实")
                     break
                 if self.planner_done and not running and not self.pending_tasks():
-                    report.finished = True
-                    report.reason = "规划者判定目标已达成"
+                    report.finished = self.goal_achieved()
+                    report.reason = (self.give_up_reason or
+                                     ("规划者判定目标已达成" if report.finished
+                                      else "规划者判定完成，但没有任何证据"))
                     break
                 if self.remaining() <= 5:
                     report.reason = "总时长预算用尽"
