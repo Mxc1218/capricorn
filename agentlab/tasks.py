@@ -31,6 +31,7 @@ class Task:
     updated: float = 0.0
     # ── 协作（M1）：谁在跑、被谁合并 ──
     worker: str = ""             # 执行者标识（并发时区分）
+    priority: int = 2            # 1=立刻 2=正常 3=可以等（规划者给，代码限最多 2 条 P1）
     merged_into: str = ""        # 被合并到哪条任务（画 merge 边用）
     merged_from: list[str] = field(default_factory=list)
 
@@ -45,7 +46,8 @@ class TaskStore:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(asdict(task), ensure_ascii=False) + "\n")
 
-    def add(self, title: str, detail: str, from_facts: list[str] | None = None) -> Task:
+    def add(self, title: str, detail: str, from_facts: list[str] | None = None,
+            priority: int = 2) -> Task:
         existing = self.all()
         nums = [int(t.id[1:]) for t in existing if t.id[1:].isdigit()]
         task = Task(
@@ -54,6 +56,7 @@ class TaskStore:
             detail=detail,
             from_facts=[f for f in (from_facts or []) if f],
             created=time.time(),
+            priority=min(3, max(1, priority)),
         )
         self._append(task)
         return task

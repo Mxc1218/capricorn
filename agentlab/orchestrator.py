@@ -124,7 +124,9 @@ class Orchestrator:
         return sum(1 for t in self.store.all() if t.status in ("pending", "running"))
 
     def pending_tasks(self) -> list[Task]:
-        return [t for t in self.store.all() if t.status == "pending"]
+        # 排序：priority 升序（1 先跑）→ created 升序（同优先级最老优先，防饿死）
+        return sorted([t for t in self.store.all() if t.status == "pending"],
+                      key=lambda t: (getattr(t, "priority", 2), t.created))
 
     def done_file_exists(self) -> bool:
         # ★ 不能只看文件是否存在：跑分脚本会先建一个空的 flag.txt 占位，
@@ -165,7 +167,7 @@ class Orchestrator:
         prompt = PLANNER_PROMPT.format(
             goal=self.goal,
             board=self.board.render(),
-            tasks=render_tasks(self.store.all()),
+            tasks=render_tasks(self.store.all(), board=self.board),
             max_new=self.max_new_tasks,
         )
         reply = self.llm.chat([{"role": "user", "content": prompt}])
@@ -193,8 +195,33 @@ class Orchestrator:
                     self.planner_done = True
 
         with self._lock:
+            # 1) 先处理 cancel / raise：让排队队列反映规划者的价值判断
+            for item in getattr(plan, "cancel", []) or []:
+                tid = str(item.get("id") or "")
+                t = self.store.get(tid)
+                if t is not None and t.status == "pending":
+                    t.status = "cancelled"
+                    t.result = "规划者取消：%s" % (item.get("why") or "")[:120]
+                    t.ended_at = time.time()
+                    self.store.update(t)
+            for item in getattr(plan, "raise_", []) or []:
+                tid = str(item.get("id") or "")
+                t = self.store.get(tid)
+                if t is not None and t.status == "pending":
+                    t.priority = 1
+                    t.result = (t.result or "") + " [提升：%s]" % (item.get("why") or "")[:80]
+                    self.store.update(t)
+
+            # 2) 派新任务：P1 最多 2 条（防止"每条都重要"= 没有重要的）
+            p1_used = sum(1 for t in self.store.all() if t.status == "pending" and t.priority == 1)
             for pt in plan.tasks[: self.max_new_tasks]:
-                self.store.add(pt.title, pt.detail, pt.from_facts)
+                prio = getattr(pt, "priority", 2)
+                if prio == 1:
+                    if p1_used >= 2:
+                        prio = 2
+                    else:
+                        p1_used += 1
+                self.store.add(pt.title, pt.detail, pt.from_facts, priority=prio)
         return True
 
     # -- 执行 ---------------------------------------------------------------
