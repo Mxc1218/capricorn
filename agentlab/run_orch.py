@@ -29,6 +29,8 @@ def main(argv=None) -> int:
     ap.add_argument("--live-dir", default="live")
     ap.add_argument("--trace-dir", default="runs")
     ap.add_argument("--model", default=None)
+    ap.add_argument("--mode", choices=["tick", "round"], default="tick", help="调度模式：tick=按槽位，round=旧的按轮")
+    ap.add_argument("--done-when", default="", help="这个文件一出现就收工（例如 <workdir>/flag.txt）")
     ap.add_argument("--check-url", default="", help="开跑前先探测这个 URL，不通就中止")
     ap.add_argument("--total-minutes", type=int, default=0, help="整轮总时长上限（分钟），0 = 不限")
     args = ap.parse_args(argv)
@@ -77,6 +79,8 @@ def main(argv=None) -> int:
         trace_dir=Path(args.trace_dir),
         live_dir=Path(args.live_dir),
         total_seconds=int(args.total_minutes) * 60,
+        mode=args.mode,
+        done_when=args.done_when,
     )
     t0 = time.time()
     report = orch.run(goal)

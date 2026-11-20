@@ -42,7 +42,10 @@ LABEL = {
 def _iso(ts: float | None) -> str | None:
     if not ts:
         return None
-    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
+    # ★ 必须发 UTC 并带 Z：他那边 stamp() 对"不带时区"的 ISO 一律当 UTC，
+    #   而我们原来发的是本地时间（+8），被当成 UTC 就成了"未来的时间"，
+    #   now-created 为负 → max(0, …) 截成 0 → 项目总用时永远显示 0.0 秒。
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
 def _read_jsonl(path: Path) -> list[dict]:

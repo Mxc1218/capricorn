@@ -1,19 +1,23 @@
 """编排 —— 一个规划者 + 若干执行者。
 
-一轮的节奏：
-    规划（读黑板+任务史，出任务） → 并发派发执行者 → 收结论（写回黑板与任务） → 下一轮
+有两种调度模式：
 
-和 Cairn 的区别只有一个，但很关键：
-    Cairn 的 reason 每落一条事实就触发一轮；这里是【按轮】触发，
-    而且规划者看得到「上一轮派了什么、结果如何」，所以不会四轮重打同一批题。
+**round（旧）**：规划 → 并发派发 → 等全部结束 → 再规划。
+    问题：t001 第 31 秒就完成了，规划者要等最慢的 t002（368 秒）才醒。
+    实测 e1-01 的 9 分钟里，有 6 分钟是这么被耗掉的。
 
-因果怎么落地（这是能画出树的前提）：
-    任务有 from_facts（依据哪些事实）和 produced（产出了哪些事实）；
-    事实有 refs 和 produced_by。两边一对，事实↔任务的边就成立了。
+**tick（新）**：每一秒看一眼 —— 谁完成了就收进来；触发器响了就派 reason；
+    有空槽就派 explore。判定用的是从 Lucy 搬来的 reason_trigger（见 trigger.py）。
+
+tick 模式的三个关键点：
+    1. reason 不阻塞：它和 explore 一样是线程池里的一个任务；
+    2. 触发靠 checkpoint 而不是"图变了"（细节见 trigger.py 顶部）；
+    3. 谁先完成谁先回来 —— 用 submit 而不是 map。
 """
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +28,10 @@ from .loop import Agent
 from .planner import PROMPT as PLANNER_PROMPT
 from .planner import parse_plan, render_tasks
 from .tasks import Task, TaskStore
+from .trigger import (ReasonCheckpoint, reason_checkpoint_decision,
+                      reason_trigger)
+
+REASON_KEY = "__reason__"
 
 
 @dataclass
@@ -39,6 +47,8 @@ class Report:
     rounds: list[Round] = field(default_factory=list)
     finished: bool = False
     reason: str = ""
+    reason_triggered: int = 0        # 规划者被唤醒了几次
+    explore_dispatched: int = 0
 
 
 class Orchestrator:
@@ -57,6 +67,10 @@ class Orchestrator:
         live_dir: Path | None = None,
         tasks_path: Path | None = None,
         total_seconds: int = 0,
+        mode: str = "tick",
+        done_when: str = "",
+        reason_cooldown: float = 60.0,
+        reason_max_attempts: int = 3,
     ):
         self.llm = llm
         self.board = board
@@ -64,22 +78,48 @@ class Orchestrator:
         self.workers = workers
         self.max_rounds = max_rounds
         self.max_new_tasks = max_new_tasks
-        # 0 = 不限步数：只靠时间预算兜底（墙钟是这个口子唯一的闸）。
+        # 0 = 不限步数：只靠时间预算兜底
         self.steps_per_task = 10**6 if (steps_per_task or 0) <= 0 else steps_per_task
         self.seconds_per_task = seconds_per_task
         self.trace_dir = trace_dir
         self.live_dir = live_dir
         self.total_seconds = total_seconds
+        self.mode = mode
+        self.done_when = done_when
+        self.reason_cooldown = reason_cooldown
+        self.reason_max_attempts = reason_max_attempts
+
         self._started_at = 0.0
-        # ★ 默认落在 workdir 里，不落当前目录 —— 否则不同任务会串到同一个 tasks.jsonl
         self.store = TaskStore(tasks_path or (self.workdir / "tasks.jsonl"))
         self._lock = threading.Lock()
         self.goal = ""
+
+        # 触发器状态（进程内，重启等于 initial —— 和 Lucy 一致）
+        self.checkpoint: ReasonCheckpoint | None = None
+        self.reason_fail_until = 0.0
+        self.reason_attempts = 0
+        self.planner_done = False
+
         if registry_factory is None:
             from .tools import board_registry
 
             registry_factory = lambda wd, tid="": board_registry(wd, self.board, task_id=tid)  # noqa: E731
         self.registry_factory = registry_factory
+
+    # -- 账目 ---------------------------------------------------------------
+    def remaining(self) -> float:
+        if not self.total_seconds or not self._started_at:
+            return float("inf")
+        return self.total_seconds - (time.time() - self._started_at)
+
+    def open_intent_count(self) -> int:
+        return sum(1 for t in self.store.all() if t.status in ("pending", "running"))
+
+    def pending_tasks(self) -> list[Task]:
+        return [t for t in self.store.all() if t.status == "pending"]
+
+    def done_file_exists(self) -> bool:
+        return bool(self.done_when) and Path(self.done_when).exists()
 
     # -- 规划 ---------------------------------------------------------------
     def plan(self):
@@ -92,12 +132,23 @@ class Orchestrator:
         reply = self.llm.chat([{"role": "user", "content": prompt}])
         return parse_plan(reply.message.get("content") or reply.reasoning or "")
 
+    def _run_reason(self) -> bool:
+        """规划者的一次唤醒。返回是否成功（决定 checkpoint 要不要推进）。"""
+        try:
+            plan = self.plan()
+        except Exception:
+            return False
+        if plan.done:
+            self.planner_done = True
+        with self._lock:
+            for pt in plan.tasks[: self.max_new_tasks]:
+                self.store.add(pt.title, pt.detail, pt.from_facts)
+        return True
+
     # -- 执行 ---------------------------------------------------------------
     def _run_task(self, task: Task) -> Task:
-        import time as _time
-
         task.status = "running"
-        task.started_at = _time.time()
+        task.started_at = time.time()
         task.worker = task.id
         self.store.update(task)
 
@@ -110,8 +161,7 @@ class Orchestrator:
             "2. 只做这一条任务，不要顺手做别的事。\n"
             "3. 做完调用 finish，把结论一句话写进 answer。\n"
             "4. 做不完也要 finish，说明卡在哪 —— 不要空转到步数用完。\n"
-            "5. 结束前必须在黑板留一条 note：做了什么、结果如何。**失败也要留**，"
-            "因为\"这条路不通\"和\"这条路通了\"一样值钱。"
+            "5. 结束前必须在黑板留一条 note：做了什么、结果如何。失败也要留。"
         ) % (task.title, task.detail, self._fact_brief(task.from_facts))
 
         live = None
@@ -139,13 +189,9 @@ class Orchestrator:
             task.result = "%s: %s" % (type(exc).__name__, exc)
             task.status = "failed"
 
-        # 因果收口：这条任务产出了哪些事实
         with self._lock:
             task.produced = [f.id for f in self.board.all() if f.id not in before]
-            task.ended_at = _time.time()
-            # ★ 模型不一定照做，所以"这轮干了什么"由编排者兜底写进黑板。
-            #   否则失败轮次在黑板上一片空白，规划者下一轮只能瞎猜 ——
-            #   实测就是这么连续猜了四个模块（命令注入→文件上传→文件包含→SQL 注入）。
+            task.ended_at = time.time()
             if not task.produced:
                 fact = self.board.add(
                     "note",
@@ -170,27 +216,8 @@ class Orchestrator:
             lines.append("- %s [%s] %s" % (fid, f.kind, f.content[:200]) if f else "- %s（不存在）" % fid)
         return "\n".join(lines)
 
-    def dispatch(self, tasks: list[Task]) -> list[Task]:
-        if not tasks:
-            return []
-        rem = self.remaining()
-        if rem <= 15:
-            return []
-        self.seconds_per_task = int(min(self.seconds_per_task, rem))
-        with ThreadPoolExecutor(max_workers=min(self.workers, len(tasks))) as pool:
-            return list(pool.map(self._run_task, tasks))
-
-    # -- 主循环 -------------------------------------------------------------
-    def remaining(self) -> float:
-        if not self.total_seconds or not self._started_at:
-            return float("inf")
-        return self.total_seconds - (__import__("time").time() - self._started_at)
-
-    def run(self, goal: str) -> Report:
-        import time as _t
-        self.goal = goal
-        self._started_at = _t.time()
-        report = Report()
+    # -- 旧模式：按轮 -------------------------------------------------------
+    def _run_rounds(self, report: Report) -> Report:
         for i in range(1, self.max_rounds + 1):
             if self.remaining() <= 20:
                 report.reason = "总时长预算用尽"
@@ -205,12 +232,112 @@ class Orchestrator:
             if not plan.tasks:
                 report.reason = "规划者没有派出任何新任务（%s）" % plan.reason
                 break
-
             created = []
             for pt in plan.tasks:
                 created.append(self.store.add(pt.title, pt.detail, pt.from_facts))
             round_.dispatched = created
-
-            self.dispatch(created)
+            with ThreadPoolExecutor(max_workers=min(self.workers, len(created))) as pool:
+                list(pool.map(self._run_task, created))
             report.reason = plan.reason
         return report
+
+    # -- 新模式：按槽位 -----------------------------------------------------
+    def _run_tick(self, report: Report) -> Report:
+        running: dict[str, object] = {}
+        with ThreadPoolExecutor(max_workers=max(1, self.workers + 1)) as pool:
+            while True:
+                # 1) 收工判定
+                if self.done_file_exists():
+                    report.finished = True
+                    report.reason = "目标产物已生成：%s" % self.done_when
+                    break
+                if self.planner_done and not running and not self.pending_tasks():
+                    report.finished = True
+                    report.reason = "规划者判定目标已达成"
+                    break
+                if self.remaining() <= 5:
+                    report.reason = "总时长预算用尽"
+                    break
+
+                # 2) 收已完成的
+                reaped = False
+                for key in [k for k, f in running.items() if f.done()]:
+                    reaped = True
+                    fut = running.pop(key)
+                    if key == REASON_KEY:
+                        ok = False
+                        try:
+                            ok = bool(fut.result())
+                        except Exception:
+                            ok = False
+                        advance, give_up = reason_checkpoint_decision(
+                            "success" if ok else "failed", self.reason_attempts, self.reason_max_attempts)
+                        if ok:
+                            self.reason_attempts = 0
+                            self.checkpoint = ReasonCheckpoint(
+                                fact_count=len(self.board.all()),
+                                hint_count=0,
+                                open_intent_count=self.open_intent_count(),
+                                last_idle_replan_facts=(self.checkpoint.last_idle_replan_facts
+                                                        if self.checkpoint else -1),
+                            )
+                        else:
+                            self.reason_attempts += 1
+                            self.reason_fail_until = time.time() + self.reason_cooldown
+                            if give_up:
+                                report.reason = "规划者连续失败，放弃"
+                    continue
+
+                # ★ 刚收完东西要【回到循环头】重新判定收工条件。
+                #   否则会出现：reason 刚说 done=True、任务也收完了，
+                #   却因为先走到"全都空了"分支而直接 break，finished 永远是 False。
+                if reaped:
+                    continue
+
+                # 3) 触发器：该不该唤醒规划者
+                explore_running = sum(1 for k in running if k != REASON_KEY)
+                if REASON_KEY not in running and time.time() >= self.reason_fail_until:
+                    trig = reason_trigger(
+                        fact_count=len(self.board.all()),
+                        hint_count=0,
+                        open_intent_count=self.open_intent_count(),
+                        running_count=len(running),
+                        checkpoint=self.checkpoint,
+                    )
+                    if trig is not None:
+                        running[REASON_KEY] = pool.submit(self._run_reason)
+                        report.reason_triggered += 1
+
+                # 4) 填空槽
+                free = self.workers - explore_running
+                if free > 0:
+                    for task in self.pending_tasks()[:free]:
+                        with self._lock:
+                            self.store.update(task)
+                        running[task.id] = pool.submit(self._run_task, task)
+                        report.explore_dispatched += 1
+
+                # 5) 全都空了 + 规划者也没打算再干 → 收工
+                if not running and not self.pending_tasks():
+                    trig = reason_trigger(
+                        fact_count=len(self.board.all()), hint_count=0,
+                        open_intent_count=0, running_count=0, checkpoint=self.checkpoint)
+                    if trig is None:
+                        if self.planner_done:
+                            report.finished = True
+                            report.reason = "规划者判定目标已达成"
+                        else:
+                            report.reason = "没有任务在跑，触发条件也不再响"
+                        break
+
+                time.sleep(1)
+        return report
+
+    # -- 入口 ---------------------------------------------------------------
+    def run(self, goal: str) -> Report:
+        self.goal = goal
+        self._started_at = time.time()
+        report = Report()
+        if self.mode == "round":
+            return self._run_rounds(report)
+        return self._run_tick(report)

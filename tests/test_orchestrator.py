@@ -58,7 +58,7 @@ def test_orchestrator_dispatches_and_writes_board(tmp_path: Path):
 
     orch = Orchestrator(llm=llm, board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": reg, workers=1,
-                        max_rounds=2, steps_per_task=2, trace_dir=None)
+                        max_rounds=2, steps_per_task=2, trace_dir=None, mode="round")
     report = orch.run("拿下目标")
 
     assert len(report.rounds) == 2

@@ -53,6 +53,25 @@ def read_jsonl(path: Path):
 def project_sources():
     # 一个跑过的项目 = (run 目录, 题目名)。他那边一个 project 就是一次尝试。
     out = []
+    # 跑分（bench/runs/<code>）也是"项目"，同一个界面里应该看得到。
+    # ★ 注意它和 eval/results 是两套目录：跑分自己带 board/live/traces，
+    #   不复用 eval/boards，否则不同题的黑板会串在一起。
+    bench = PROJECT / "bench" / "runs"
+    if bench.exists():
+        for run in sorted(bench.iterdir()):
+            if not run.is_dir():
+                continue
+            bt = run / "tasks.jsonl"
+            if not bt.exists():
+                continue
+            out.append({
+                "project_id": "bench-" + run.name,
+                "title": "跑分 " + run.name,
+                "board_path": str(run / "board.jsonl"),
+                "tasks_path": str(bt),
+                "live_dir": str(run / "live"),
+            })
+
     if not RESULTS.exists():
         return out
     used = set()

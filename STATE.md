@@ -2,7 +2,7 @@
 
 > 换会话、换人、或者三个月后回来看，先读这一页。
 > **规矩：边做边改，不要等到收工才写。**
-> 最后更新：2026-11-19
+> 最后更新：2026-11-20
 
 ## 目标
 
@@ -45,6 +45,29 @@
 - 「上下文压缩省 30 倍」—— 理论值（全量 39k/轮 vs 增量 3.9k），无对照
 - 「编排比单 agent 强」—— 代码有了，**还没在同一道题上对比过**
 
+
+## 2026-11-20 进展（跑分 + 调度改造）
+
+| 块 | 内容 | 证据 |
+|---|---|---|
+| 跑分接入 | bench/run_one.py：SDK 起容器 → 摩羯打 → 抠 flag → 提交 → 关容器 | bench/runs/e1-01/ |
+| 首题通关 | e1-01（SQLi 登录绕过 → 会话登录）9 分钟拿旗，250 分已提交 | 平台 progress=1/1 |
+| 触发器迁移 | agentlab/trigger.py 从 Lucy 原样搬三个纯函数 + 11 项语义测试 | tests/test_trigger.py |
+| 调度改造 | mode=tick：按槽位触发、reason 异步、谁先完成谁先回来 | tests/test_tick.py |
+| 达成即停 | --done-when flag.txt | test_tick_stops_when_done_file_appears |
+
+## 环境结论（今天实测）
+
+| 路径 | 靶场可达 | 用途 |
+|---|---|---|
+| 宿主 Windows cmd | 可以 | 但 shell 残，42% 调用因转义失败 |
+| WSL bash | 可以 | 跑分用这个（AGENTLAB_SHELL=wsl） |
+| Docker 容器 | 502 | TCP 能连，HTTP 被 Clash 拦；--network host 也一样 |
+
+## 待验证
+
+- tick 模式 vs round 模式的 A/B（同一道 e1-01）
+- 容器网络 502：给 Clash 加 10.0.0.0/8 直连规则后重测
 ## 下一步
 
 1. 拿 DVWA 跑一次**编排**，和单 agent 的 32 次调用对比（最难的一步：真数据）
