@@ -30,6 +30,7 @@ def main(argv=None) -> int:
     ap.add_argument("--trace-dir", default="runs")
     ap.add_argument("--model", default=None)
     ap.add_argument("--mode", choices=["tick", "round"], default="tick", help="调度模式：tick=按槽位，round=旧的按轮")
+    ap.add_argument("--flag-count", type=int, default=1, help="这题要收几个 flag（b 系列每题 4 个）")
     ap.add_argument("--done-when", default="", help="这个文件一出现就收工（例如 <workdir>/flag.txt）")
     ap.add_argument("--check-url", default="", help="开跑前先探测这个 URL，不通就中止")
     ap.add_argument("--total-minutes", type=int, default=0, help="整轮总时长上限（分钟），0 = 不限")
@@ -80,6 +81,7 @@ def main(argv=None) -> int:
         live_dir=Path(args.live_dir),
         total_seconds=int(args.total_minutes) * 60,
         mode=args.mode,
+        flag_count=args.flag_count,
         done_when=args.done_when,
     )
     t0 = time.time()

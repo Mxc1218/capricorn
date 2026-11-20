@@ -147,12 +147,24 @@ def build_project(source: dict) -> dict:
         for ref in (_read_refs(facts_raw, f["id"])):
             edges.append({"type": "trigger", "from": ref, "to": f["id"]})
 
+    # ★ 读 run.json：有结束时间就把项目标成 finished。
+    #   否则前端认为项目还在 active，"项目总用时"会一直涨（实测跑完后 8 分钟还在涨）。
+    run_meta = {}
+    try:
+        rp = Path(source["tasks_path"]).parent / "run.json"
+        if rp.exists():
+            run_meta = json.loads(rp.read_text(encoding="utf-8"))
+    except Exception:
+        run_meta = {}
+
     return {
         "project": {
             "id": pid,
             "title": source.get("title") or pid,
             "platform": source.get("platform") or "local",
-            "status": source.get("status") or "active",
+            "status": "finished" if run_meta.get("ended_at") else (source.get("status") or "active"),
+            "ended_at": _iso(run_meta.get("ended_at")),
+            "elapsed_s": run_meta.get("elapsed_s"),
             # 项目创建时间 = 最早那条任务的派发时刻；缺了就用现在（会显示 0.0 秒，那是真话）
             "created_at": _iso(source.get("created_at")) or _iso(min([t.get("created") or now for t in tasks.values()] or [now])),
         },

@@ -16,6 +16,7 @@ tick 模式的三个关键点：
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -71,6 +72,8 @@ class Orchestrator:
         done_when: str = "",
         reason_cooldown: float = 60.0,
         reason_max_attempts: int = 3,
+        flag_count: int = 1,                 # 这题要收几个 flag（b 系列每题 4 个）
+        reason_min_interval: float = 30.0,   # reason 最小间隔（去抖）
     ):
         self.llm = llm
         self.board = board
@@ -88,6 +91,9 @@ class Orchestrator:
         self.done_when = done_when
         self.reason_cooldown = reason_cooldown
         self.reason_max_attempts = reason_max_attempts
+        self.flag_count = max(1, flag_count)
+        self.reason_min_interval = reason_min_interval
+        self.last_reason_at = 0.0
 
         self._started_at = 0.0
         self.store = TaskStore(tasks_path or (self.workdir / "tasks.jsonl"))
@@ -132,21 +138,27 @@ class Orchestrator:
         except Exception:
             return False
 
-    def board_has_flag(self) -> bool:
-        """黑板上是否已经有 flag 类事实。
-
-        ★ 实测（2026-11-20，e1-01 第二次跑）：agent 把 flag 记进了黑板 f004，
-          但没写 flag.txt —— 只盯文件的话，达成判定永远不响，它会继续跑满预算。
-          "结果落在哪"不该只有一条通道。
-        """
+    def flags_found(self) -> set:
+        # 黑板上已经拿到的 flag 值（去重）。
+        # ★ 去重：同一个 flag 可能被多个方向各写一遍。
+        # ★ 数个数：b 系列每题 4 个 flag，拿到一个就收工会白丢 750 分。
+        import re as _re
+        pat = _re.compile(r"[A-Za-z0-9_]{2,20}\{[^}\n]{2,}\}")
+        out = set()
         for f in self.board.all():
-            if f.kind == "flag" and (f.content or "").strip():
-                return True
-        return False
+            if f.kind == "flag":
+                out |= set(pat.findall(f.content or ""))
+        return out
+
+    def board_has_flag(self) -> bool:
+        return bool(self.flags_found())
 
     def goal_achieved(self) -> bool:
-        """目标达成的两条通道：产物文件有内容，或黑板上已有 flag 事实。"""
-        return self.done_file_exists() or self.board_has_flag()
+        # 达成 = 拿到的 flag 数够了。
+        # 单旗题（flag_count=1）额外认产物文件：有些题直接把 flag 写进 flag.txt 就完事。
+        if len(self.flags_found()) >= self.flag_count:
+            return True
+        return self.flag_count == 1 and self.done_file_exists()
 
     # -- 规划 ---------------------------------------------------------------
     def plan(self):
@@ -338,8 +350,14 @@ class Orchestrator:
                     continue
 
                 # 3) 触发器：该不该唤醒规划者
+                #    ★ 去抖：worker 一口气写 5 条事实时，别触发 5 次规划。
+                #      两个条件都要满足：触发器响 + 距上次规划超过最小间隔。
                 explore_running = sum(1 for k in running if k != REASON_KEY)
-                if REASON_KEY not in running and time.time() >= self.reason_fail_until:
+                now = time.time()
+                can_reason = (REASON_KEY not in running
+                              and now >= self.reason_fail_until
+                              and now - self.last_reason_at >= self.reason_min_interval)
+                if can_reason:
                     trig = reason_trigger(
                         fact_count=len(self.board.all()),
                         hint_count=0,
@@ -348,6 +366,7 @@ class Orchestrator:
                         checkpoint=self.checkpoint,
                     )
                     if trig is not None:
+                        self.last_reason_at = now
                         running[REASON_KEY] = pool.submit(self._run_reason)
                         report.reason_triggered += 1
 
@@ -373,6 +392,13 @@ class Orchestrator:
                             report.reason = "没有任务在跑，触发条件也不再响"
                         break
 
+                # 心跳：每 10 秒一行，专治"flag 已经进了黑板但没停"这类问题
+                if int(time.time() - self._started_at) % 10 == 0:
+                    print("[tick] 已跑 %.0fs 事实=%d 待跑=%d 在跑=%d 达成=%s"
+                          % (time.time() - self._started_at, len(self.board.all()),
+                             len(self.pending_tasks()), len(running), self.goal_achieved()),
+                          flush=True)
+
                 time.sleep(1)
         return report
 
@@ -381,6 +407,51 @@ class Orchestrator:
         self.goal = goal
         self._started_at = time.time()
         report = Report()
-        if self.mode == "round":
-            return self._run_rounds(report)
-        return self._run_tick(report)
+        try:
+            if self.mode == "round":
+                report = self._run_rounds(report)
+            else:
+                report = self._run_tick(report)
+        finally:
+            self._finalize(report)
+        return report
+
+    def _finalize(self, report: Report) -> None:
+        """收尾：把还在跑的任务标成失败、写一份 run.json。
+
+        ★ 为什么一定要写 run.json：前端判断"项目是否已停止"靠的是 status，
+          我们原来永远写 active —— 于是跑完以后"项目总用时"还在涨（实测 8 分钟）。
+          有了 ended 时间，前端就能定格在"止于最后活动"。
+        """
+        ended = time.time()
+        try:
+            for t in self.store.all():
+                if t.status == "pending" and not t.started_at:
+                    # 连跑都没跑上 —— 标 cancelled，不要标 failed（否则统计全污染）
+                    t.status = "cancelled"
+                    t.result = "排队中未起跑（预算结束）"
+                    t.ended_at = t.ended_at or ended
+                    self.store.update(t)
+                    continue
+                if t.status in ("pending", "running"):
+                    t.status = "failed"
+                    t.result = t.result or "进程退出时仍未收尾"
+                    t.ended_at = t.ended_at or ended
+                    self.store.update(t)
+        except Exception:
+            pass
+        try:
+            path = Path(self.workdir) / "run.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "started_at": self._started_at,
+                "ended_at": ended,
+                "elapsed_s": round(ended - (self._started_at or ended), 1),
+                "finished": bool(getattr(report, "finished", False)),
+                "reason": getattr(report, "reason", ""),
+                "mode": self.mode,
+                "explore_dispatched": getattr(report, "explore_dispatched", 0),
+                "reason_triggered": getattr(report, "reason_triggered", 0),
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass

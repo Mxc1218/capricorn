@@ -50,7 +50,7 @@ def goal_text(ch, started) -> str:
     ])
 
 
-def run_agent(work: Path, goal: str, minutes: int, engine: str, on_flag=None) -> list[str]:
+def run_agent(work: Path, goal: str, minutes: int, engine: str, on_flag=None, flag_count: int = 1) -> list[str]:
     work.mkdir(parents=True, exist_ok=True)
     (work / "goal.txt").write_text(goal, encoding="utf-8")
     (work / "flag.txt").write_text("", encoding="utf-8")
@@ -70,7 +70,7 @@ def run_agent(work: Path, goal: str, minutes: int, engine: str, on_flag=None) ->
             "python3", "-m", "agentlab.run_orch",
             "--goal-file", "/work/goal.txt",
             "--workers", "2", "--rounds", "8", "--task-steps", "0", "--mode", "tick",
-            "--task-seconds", "600", "--total-minutes", str(minutes), "--done-when", str(work / "flag.txt"),
+            "--task-seconds", "600", "--total-minutes", str(minutes), "--done-when", str(work / "flag.txt"), "--flag-count", str(flag_count),
             "--workdir", "/work", "--board", "/work/board.jsonl",
             "--live-dir", "/work/live", "--trace-dir", "/work/traces",
         ]
@@ -80,7 +80,7 @@ def run_agent(work: Path, goal: str, minutes: int, engine: str, on_flag=None) ->
         cmd = [sys.executable, "-m", "agentlab.run_orch",
                "--goal-file", str(work / "goal.txt"),
                "--workers", "2", "--rounds", "8", "--task-steps", "0", "--mode", "tick",
-               "--task-seconds", "600", "--total-minutes", str(minutes), "--done-when", str(work / "flag.txt"),
+               "--task-seconds", "600", "--total-minutes", str(minutes), "--done-when", str(work / "flag.txt"), "--flag-count", str(flag_count),
                "--workdir", str(work), "--board", str(work / "board.jsonl"),
                "--live-dir", str(work / "live"), "--trace-dir", str(work / "traces")]
 
@@ -183,7 +183,7 @@ def main(argv=None) -> int:
 
             try:
                 flags = run_agent(RUNS / ch.unique_code, goal_text(ch, started), args.minutes,
-                                  args.engine, on_flag=submit_now)
+                                  args.engine, on_flag=submit_now, flag_count=ch.flag_count)
                 print("[agent] 本题共抓到 %d 个 flag" % len(flags), flush=True)
             finally:
                 try:

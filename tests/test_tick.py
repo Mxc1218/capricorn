@@ -60,7 +60,7 @@ def test_tick_triggers_reason_then_dispatches(tmp_path: Path):
     orch = Orchestrator(llm=llm, board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": reg, workers=1,
                         steps_per_task=2, trace_dir=None, mode="tick",
-                        total_seconds=30)
+                        total_seconds=30, reason_min_interval=0)
     report = orch.run("拿下")
 
     assert report.reason_triggered >= 2, "initial 之后事实增长应该再触发一次"
@@ -79,7 +79,7 @@ def test_board_flag_stops_the_run(tmp_path: Path):
     ])
     orch = Orchestrator(llm=llm, board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": reg, workers=1,
-                        steps_per_task=2, trace_dir=None, mode="tick", total_seconds=20)
+                        steps_per_task=2, trace_dir=None, mode="tick", total_seconds=20, reason_min_interval=0)
     report = orch.run("拿 flag")
     assert report.finished is True
     assert "flag" in report.reason
@@ -97,7 +97,7 @@ def test_tick_stops_when_done_file_appears(tmp_path: Path):
     orch = Orchestrator(llm=llm, board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": reg, workers=1,
                         steps_per_task=2, trace_dir=None, mode="tick",
-                        total_seconds=20, done_when=str(flag))
+                        total_seconds=20, done_when=str(flag), reason_min_interval=0)
     report = orch.run("拿 flag")
     assert report.finished is True
     assert "目标产物已生成" in report.reason
@@ -116,7 +116,7 @@ def test_tick_respects_slot_limit(tmp_path: Path):
     orch = Orchestrator(llm=llm, board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": reg, workers=1,
                         steps_per_task=2, trace_dir=None, mode="tick",
-                        total_seconds=30)
+                        total_seconds=30, reason_min_interval=0)
     report = orch.run("干活")
     assert report.explore_dispatched == 2
     assert all(t.status == "done" for t in orch.store.all())
@@ -131,7 +131,7 @@ def test_empty_done_file_does_not_stop(tmp_path: Path):
     orch = Orchestrator(llm=FakeLLM([]), board=Board(tmp_path / "b.jsonl"),
                         workdir=tmp_path, registry_factory=lambda wd, tid="": make_reg(),
                         workers=1, steps_per_task=1, trace_dir=None, mode="tick",
-                        total_seconds=5, done_when=str(flag))
+                        total_seconds=5, done_when=str(flag), reason_min_interval=0)
     assert orch.done_file_exists() is False
     flag.write_text("flag{x}", encoding="utf-8")     # 有内容才算
     assert orch.done_file_exists() is True
@@ -147,7 +147,7 @@ def test_board_flag_counts_as_done(tmp_path: Path):
     orch = Orchestrator(llm=FakeLLM([]), board=board, workdir=tmp_path,
                         registry_factory=lambda wd, tid="": make_reg(),
                         workers=1, steps_per_task=1, trace_dir=None, mode="tick",
-                        total_seconds=5, done_when=str(flag))
+                        total_seconds=5, done_when=str(flag), reason_min_interval=0)
     assert orch.goal_achieved() is False
     board.add("flag", "flag{abc}", evidence_status="accepted")
     assert orch.goal_achieved() is True
